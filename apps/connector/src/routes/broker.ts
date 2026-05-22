@@ -1,5 +1,5 @@
-import { Hono } from "hono";
-import { brokerService, type BrokerConfig } from "~/services/broker";
+import { Hono, type Context } from "hono";
+import { brokerService } from "~/services/broker";
 import type { AppEnv } from "~/types";
 import { mapBrokerError } from "~/utils/error-mapper";
 import { vValidator } from "@hono/valibot-validator";
@@ -34,7 +34,7 @@ export const brokerRoutes = new Hono<AppEnv>()
    */
   .post(
     "/",
-    vValidator("json", brokerConfigSchema, (result, c) => {
+    vValidator("json", brokerConfigSchema, (result, c: Context<AppEnv>) => {
       const log = c.var.logger.child({ handler: "POST /api/broker" });
       if (!result.success) {
         log.warn({ issues: result.issues }, "validation failed");
@@ -50,6 +50,7 @@ export const brokerRoutes = new Hono<AppEnv>()
 
         return c.json({ error: result.issues[0].message || "Invalid request parameters" }, 400);
       }
+      return;
     }),
     async (c) => {
       const log = c.var.logger.child({ handler: "POST /api/broker" });

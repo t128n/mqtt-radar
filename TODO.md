@@ -24,4 +24,4 @@
   - Add root-level `README.md` explaining monorepo architecture and CLI usage.
   - Replace boilerplate web `README.md` with genuine project documentation.
   - Add standard `LICENSE` file.
-- [ ] **Setup CI/CD Pipeline**: Add GitHub Actions workflow for linting, type-checking, and automatically publishing CLI binary builds.
+- [x] **Setup CI/CD Pipeline**: Add GitHub Actions workflow for linting, type-checking, and automatically publishing CLI binary builds.

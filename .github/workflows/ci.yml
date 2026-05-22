@@ -1,0 +1,96 @@
+name: CI/CD Pipeline
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+# Grant permissions required for deploying to GitHub Pages
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# Prevent concurrent runs on the same branch from interfering with each other
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint-and-typecheck:
+    name: Lint & Typecheck
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 11.2.0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+
+      - name: Install Dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Check Formatting (oxfmt)
+        run: pnpm --filter mqtt-radar-connector exec oxfmt --check
+
+      - name: Run Linter (oxlint)
+        run: pnpm lint
+
+      - name: Run Typechecks (svelte-check & tsc)
+        run: pnpm typecheck
+
+      - name: Verify Connector Builds successfully
+        run: pnpm --filter mqtt-radar-connector build
+
+      - name: Verify Precompiled ESM Bundle is Up-to-Date
+        run: git diff --exit-code apps/connector/dist/mqtt-radar-connector.mjs
+
+  deploy-web:
+    name: Deploy Web to GitHub Pages
+    needs: lint-and-typecheck
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 11.2.0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+
+      - name: Install Dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build Web App for GitHub Pages
+        run: BASE_PATH=/mqtt-radar/ pnpm --filter web build
+
+      - name: Configure GitHub Pages
+        uses: actions/configure-pages@v5
+
+      - name: Upload Pages Artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: apps/web/dist
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

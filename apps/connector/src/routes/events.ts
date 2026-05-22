@@ -1,4 +1,4 @@
-import { Hono } from "hono";
+import { Hono, type Context } from "hono";
 import { streamSSE } from "hono/streaming";
 import { brokerService, type MqttMessage } from "~/services/broker.js";
 import type { AppEnv } from "~/types";
@@ -28,12 +28,13 @@ export const eventRoutes = new Hono<AppEnv>()
    */
   .get(
     "/",
-    vValidator("query", eventsQuerySchema, (result, c) => {
+    vValidator("query", eventsQuerySchema, (result, c: Context<AppEnv>) => {
       if (!result.success) {
         const log = c.var.logger.child({ handler: "GET /api/events" });
         log.warn({ issues: result.issues }, "validation failed");
         return c.json({ error: result.issues[0].message || "Invalid query parameters" }, 400);
       }
+      return;
     }),
     async (c) => {
       const { filter = "#" } = c.req.valid("query");

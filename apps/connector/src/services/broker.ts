@@ -4,19 +4,31 @@ import type { Logger } from "pino";
 
 export type BrokerConfig = {
   url: string;
-  clientId?: string;
-  username?: string;
-  password?: string;
-  ca?: string;
-  cert?: string;
-  key?: string;
-  rejectUnauthorized?: boolean;
+  clientId?: string | undefined;
+  username?: string | undefined;
+  password?: string | undefined;
+  ca?: string | undefined;
+  cert?: string | undefined;
+  key?: string | undefined;
+  rejectUnauthorized?: boolean | undefined;
 };
 
 export type MqttMessage = {
   topic: string;
   payload: string;
 };
+
+function cleanMqttOptions(config: BrokerConfig, clientId: string) {
+  const options: Record<string, any> = { clientId };
+  if (config.username !== undefined) options.username = config.username;
+  if (config.password !== undefined) options.password = config.password;
+  if (config.ca !== undefined) options.ca = config.ca;
+  if (config.cert !== undefined) options.cert = config.cert;
+  if (config.key !== undefined) options.key = config.key;
+  if (config.rejectUnauthorized !== undefined)
+    options.rejectUnauthorized = config.rejectUnauthorized;
+  return options;
+}
 
 class BrokerService extends EventEmitter {
   private discoveryClient: MqttClient | null = null;
@@ -74,10 +86,10 @@ class BrokerService extends EventEmitter {
 
     try {
       // 1. Connect and configure the Discovery Client
-      this.discoveryClient = await mqtt.connectAsync(config.url, {
-        ...config,
-        clientId: discoveryClientId,
-      });
+      this.discoveryClient = await mqtt.connectAsync(
+        config.url,
+        cleanMqttOptions(config, discoveryClientId),
+      );
 
       this.log.info({ url: config.url }, "discoveryClient connected successfully");
 
@@ -93,10 +105,7 @@ class BrokerService extends EventEmitter {
       await this.subscribeWithFallback(this.discoveryClient, "#");
 
       // 2. Connect and configure the Data Client
-      this.dataClient = await mqtt.connectAsync(config.url, {
-        ...config,
-        clientId: dataClientId,
-      });
+      this.dataClient = await mqtt.connectAsync(config.url, cleanMqttOptions(config, dataClientId));
 
       this.log.info({ url: config.url }, "dataClient connected successfully");
 

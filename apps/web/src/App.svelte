@@ -202,7 +202,7 @@
     const sseUrl = `${activeOrigin}/api/events?filter=${encodeURIComponent(filter || "#")}`;
     const es = new EventSource(sseUrl);
 
-    // Discovery connection sends lightweight topic events
+    // Discovery connection sends lightweight topic events (legacy fallback)
     es.addEventListener("topic", (event) => {
       try {
         const data = JSON.parse(event.data);
@@ -218,7 +218,7 @@
       }
     });
 
-    // Data connection sends full MQTT message events (already filtered by backend)
+    // Data connection sends full MQTT message events (legacy fallback)
     es.addEventListener("message", (event) => {
       try {
         const msg = JSON.parse(event.data);
@@ -243,6 +243,52 @@
         }
       } catch (err) {
         console.error("Failed to parse SSE message event:", err);
+      }
+    });
+
+    // Process batched events from the connector to mitigate high-frequency backpressure
+    es.addEventListener("batch", (event) => {
+      try {
+        const batch = JSON.parse(event.data);
+        if (Array.isArray(batch)) {
+          let hasNewTopics = false;
+          let hasNewMessages = false;
+
+          for (const ev of batch) {
+            if (ev.type === "topic" && ev.topic) {
+              if (!knownTopics.has(ev.topic)) {
+                knownTopics.add(ev.topic);
+                newTopicsBuffer.push(ev.topic);
+                hasNewTopics = true;
+              }
+            } else if (ev.type === "message" && ev.msg && ev.msg.topic) {
+              messageBuffer.unshift({
+                topic: ev.msg.topic,
+                payload: ev.msg.payload,
+                id: `${ev.msg.topic}_${Date.now()}_${Math.random().toString(36).substring(2, 11)}`,
+                time: Date.now(),
+              });
+              hasNewMessages = true;
+            }
+          }
+
+          if (hasNewMessages) {
+            // Constrain buffer before flush just in case it's huge
+            if (messageBuffer.length > 500) {
+              messageBuffer.length = 500;
+            }
+
+            if (isPaused) {
+              bufferedCount = messageBuffer.length;
+            }
+          }
+
+          if (hasNewTopics || hasNewMessages) {
+            scheduleFlush();
+          }
+        }
+      } catch (err) {
+        console.error("Failed to parse SSE batch event:", err);
       }
     });
 

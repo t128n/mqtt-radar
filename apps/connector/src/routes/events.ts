@@ -40,6 +40,9 @@ export const eventRoutes = new Hono<AppEnv>()
       log.error({ err }, "failed to update data subscription on connect");
     }
 
+    const BATCH_WINDOW_MS = 100;
+    const BATCH_SIZE_LIMIT = 100;
+
     return streamSSE(c, async (stream) => {
       let messageCount = 0;
       let isAborted = false;
@@ -50,37 +53,60 @@ export const eventRoutes = new Hono<AppEnv>()
 
       const queue: SSEEvent[] = [];
       let resolveQueue: (() => void) | null = null;
+      let lastSentTime = 0;
+      let flushTimer: ReturnType<typeof setTimeout> | null = null;
 
-      const topicHandler = (topic: string) => {
-        log.debug({ topic }, "queuing discovered topic event");
-        queue.push({ type: "topic", topic });
-        if (queue.length > 300) {
-          queue.shift(); // Drop oldest event to enforce backpressure
-        }
+      const triggerFlush = () => {
         if (resolveQueue) {
           resolveQueue();
           resolveQueue = null;
+        }
+        if (flushTimer) {
+          clearTimeout(flushTimer);
+          flushTimer = null;
         }
       };
 
+      const queueAndSchedule = (event: SSEEvent) => {
+        queue.push(event);
+        if (queue.length > 500) {
+          queue.shift(); // Enforce hard backpressure to prevent memory bloat
+        }
+
+        const now = Date.now();
+
+        // If we reach the batch limit size, flush immediately
+        if (queue.length >= BATCH_SIZE_LIMIT) {
+          triggerFlush();
+          return;
+        }
+
+        const timeSinceLastSent = now - lastSentTime;
+        if (timeSinceLastSent < BATCH_WINDOW_MS) {
+          // If we recently sent a message, enter batching mode and delay
+          if (!flushTimer) {
+            const delay = BATCH_WINDOW_MS - timeSinceLastSent;
+            flushTimer = setTimeout(triggerFlush, delay);
+          }
+        } else {
+          // No recent sends, deliver immediately for low latency
+          triggerFlush();
+        }
+      };
+
+      const topicHandler = (topic: string) => {
+        log.debug({ topic }, "queuing discovered topic event");
+        queueAndSchedule({ type: "topic", topic });
+      };
+
       const messageHandler = (msg: MqttMessage) => {
-        queue.push({ type: "message", msg });
-        if (queue.length > 300) {
-          queue.shift(); // Drop oldest event to enforce backpressure
-        }
-        if (resolveQueue) {
-          resolveQueue();
-          resolveQueue = null;
-        }
+        queueAndSchedule({ type: "message", msg });
       };
 
       const disconnectHandler = () => {
         log.info("broker disconnected; closing SSE stream");
         isAborted = true;
-        if (resolveQueue) {
-          resolveQueue();
-          resolveQueue = null;
-        }
+        triggerFlush();
       };
 
       try {
@@ -90,10 +116,7 @@ export const eventRoutes = new Hono<AppEnv>()
 
         stream.onAbort(() => {
           isAborted = true;
-          if (resolveQueue) {
-            resolveQueue();
-            resolveQueue = null;
-          }
+          triggerFlush();
           log.info({ messageCount }, "SSE client disconnected");
         });
 
@@ -130,25 +153,19 @@ export const eventRoutes = new Hono<AppEnv>()
 
           if (isAborted) break;
 
-          // 1. Process queued messages sequentially
-          while (queue.length > 0 && !isAborted) {
-            const event = queue.shift()!;
+          // 1. Process queued messages in adaptive batches
+          if (queue.length > 0) {
+            const batch = queue.splice(0, queue.length);
+            lastSentTime = Date.now();
             try {
-              if (event.type === "topic") {
-                await stream.writeSSE({
-                  event: "topic",
-                  data: JSON.stringify({ topic: event.topic }),
-                });
-              } else if (event.type === "message") {
-                messageCount++;
-                await stream.writeSSE({
-                  event: "message",
-                  data: JSON.stringify(event.msg),
-                  id: String(messageCount),
-                });
-              }
+              messageCount += batch.length;
+              await stream.writeSSE({
+                event: "batch",
+                data: JSON.stringify(batch),
+                id: String(messageCount),
+              });
             } catch (writeErr) {
-              log.error({ writeErr }, "Failed to write event to SSE client; closing stream");
+              log.error({ writeErr }, "Failed to write batch to SSE client; closing stream");
               isAborted = true;
               break;
             }
@@ -167,7 +184,11 @@ export const eventRoutes = new Hono<AppEnv>()
           }
         }
       } finally {
-        log.info({ messageCount }, "cleaning up SSE stream event listeners");
+        log.info({ messageCount }, "cleaning up SSE stream event listeners and timers");
+        if (flushTimer) {
+          clearTimeout(flushTimer);
+          flushTimer = null;
+        }
         brokerService.off("topic", topicHandler);
         brokerService.off("message", messageHandler);
         brokerService.off("disconnect", disconnectHandler);

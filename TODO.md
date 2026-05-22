@@ -5,7 +5,7 @@
 - [x] **Secure Local Connector**: Restrict CORS wildcard policy.  Either from localhost:*, 127.0.0.1:* or t128n.github.io/mqtt-radar/. 
 
 ### ⚡ Performance & Reliability
-- [ ] **Backend SSE Throttling/Batching**: Buffer and batch outbound events in the connector Hono route to mitigate backpressure on high-frequency MQTT topics.
+- [x] **Backend SSE Throttling/Batching**: Buffer and batch outbound events in the connector Hono route to mitigate backpressure on high-frequency MQTT topics.
 - [ ] **Robust Reconnection**: Add an exponential-backoff retry loop to the Svelte EventSource connection error handler to prevent aggressive pairing wipes on transient drops.
 - [ ] **Friendly Broker Connection Feedback**: Map raw TCP/MQTT connection errors (like `ECONNREFUSED`, `ENOTFOUND`, certificate mismatches) to descriptive, user-friendly strings on the backend, and display them in the frontend popover.
 
@@ -22,7 +22,7 @@
 - [ ] **Support `npx` from GitHub**: Modify root `.gitignore` to allow tracking of pre-compiled binaries inside `apps/connector/dist/` so that executing `npx github:t128n/mqtt-radar` works out-of-the-box.
 - [ ] **API Validation with Valibot**: Add `valibot` schema validation to Hono backend endpoints (such as `POST /api/broker`) to check incoming parameters safely.
 - [ ] **Serve Web from Connector**: Allow the local connector to optionally serve the compiled Svelte frontend directly, bypassing CORS and browser Mixed-Content blocks when pairing with `https://mqtt.t128n.dev`.
-- [ ] **CLI Configuration**: Use a CLI parsing library (`cac` or `commander`) to support flags like `--port`, `--host`, `--log-level`, and `--no-open`.
+- [ ] **CLI Configuration**: Use a CLI parsing library (bomb.sh args) to support flags like `--port`, `--host`, `--log-level`, `--no-open`, and e.g. for backpressure, batching, ...
 - [ ] **Finalize Repo Structure**: 
   - Add root-level `README.md` explaining monorepo architecture and CLI usage.
   - Replace boilerplate web `README.md` with genuine project documentation.

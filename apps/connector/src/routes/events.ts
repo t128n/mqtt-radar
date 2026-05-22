@@ -2,6 +2,7 @@ import { Hono } from "hono";
 import { streamSSE } from "hono/streaming";
 import { brokerService, type MqttMessage } from "~/services/broker.js";
 import type { AppEnv } from "~/types";
+import { isAllowedOrigin } from "~/utils/cors";
 
 export const eventRoutes = new Hono<AppEnv>()
   /**
@@ -26,7 +27,9 @@ export const eventRoutes = new Hono<AppEnv>()
 
     // Manually set CORS headers for SSE stream to bypass Hono middleware header-locking issues
     const origin = c.req.header("Origin");
-    c.header("Access-Control-Allow-Origin", origin || "*");
+    if (isAllowedOrigin(origin)) {
+      c.header("Access-Control-Allow-Origin", origin);
+    }
     c.header("Access-Control-Allow-Methods", "GET, OPTIONS");
     c.header("Access-Control-Allow-Headers", "Content-Type, Authorization");
 

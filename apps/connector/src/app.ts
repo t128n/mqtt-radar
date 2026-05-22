@@ -9,6 +9,7 @@ import { brokerService } from "~/services/broker";
 import { brokerRoutes } from "~/routes/broker";
 import { eventRoutes } from "~/routes/events";
 import { cors } from "hono/cors";
+import { isAllowedOrigin } from "~/utils/cors";
 import { exec } from "node:child_process";
 import { isDevelopment } from "std-env";
 
@@ -42,12 +43,15 @@ async function main() {
     }),
   );
 
-  // CORS middleware - allow any origin dynamically
+  // CORS middleware - restrict to allowed origins
   app.use(
     "*",
     cors({
       origin: (origin) => {
-        return origin || "*";
+        if (isAllowedOrigin(origin)) {
+          return origin;
+        }
+        return undefined;
       },
       allowHeaders: ["Authorization", "Content-Type"],
       allowMethods: ["GET", "POST", "DELETE", "OPTIONS"],

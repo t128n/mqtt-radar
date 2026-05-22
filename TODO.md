@@ -10,11 +10,11 @@
 - [x] **Friendly Broker Connection Feedback**: Map raw TCP/MQTT connection errors (like `ECONNREFUSED`, `ENOTFOUND`, certificate mismatches) to descriptive, user-friendly strings on the backend, and display them in the frontend popover.
 
 ### 🌐 Web Site QoL & SEO
-- [ ] **Favicon Redesign**: Replace default Svelte favicon with a custom-designed radar/MQTT themed favicon in SVG/ICO formats, including apple-touch-icon. Use Lucide Radar Icon as from the App Header.
-- [ ] **Search Engine Optimization (SEO)**:
-  - [ ] Set title to a descriptive name (e.g. `MQTT Radar`).
-  - [ ] Add meta description, keywords, and robot crawler tags in `apps/web/index.html`.
-  - [ ] Add Open Graph (OG) tags (`og:title`, `og:description`, `og:url`, `og:type`) for rich embeds on Discord/Slack/GitHub.
+- [x] **Favicon Redesign**: Replace default Svelte favicon with a custom-designed radar/MQTT themed favicon in SVG/ICO formats, including apple-touch-icon. Use Lucide Radar Icon as from the App Header.
+- [x] **Search Engine Optimization (SEO)**:
+  - [x] Set title to a descriptive name (e.g. `MQTT Radar`).
+  - [x] Add meta description, keywords, and robot crawler tags in `apps/web/index.html`.
+  - [x] Add Open Graph (OG) tags (`og:title`, `og:description`, `og:url`, `og:type`) for rich embeds on Discord/Slack/GitHub.
 
 ### 🏗️ Architecture & 0.1.0 Release Setup
 - [ ] **Support `npx` from GitHub**: Modify root `.gitignore` to allow tracking of pre-compiled binaries inside `apps/connector/dist/` so that executing `npx github:t128n/mqtt-radar` works out-of-the-box.

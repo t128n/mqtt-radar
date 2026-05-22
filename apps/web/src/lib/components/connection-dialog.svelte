@@ -89,6 +89,25 @@
           Start the connector using your preferred package manager or runtime in your shell.
         </p>
 
+        {#snippet codeBlock(cmd: string)}
+          <div class="relative flex items-center justify-between p-3 bg-muted/30 border border-border rounded-md font-mono text-[11px] text-foreground group">
+            <span class="select-all overflow-x-auto whitespace-nowrap scrollbar-none pr-10">{cmd}</span>
+            
+            <button
+              type="button"
+              onclick={handleCopy}
+              class="absolute right-3 top-1/2 -translate-y-1/2 flex items-center justify-center h-6 w-6 text-muted-foreground hover:text-foreground transition-colors cursor-pointer"
+              title="Copy command to clipboard"
+            >
+              {#if copied}
+                <Check class="h-3.5 w-3.5 text-foreground animate-in fade-in duration-200" />
+              {:else}
+                <Copy class="h-3.5 w-3.5" />
+              {/if}
+            </button>
+          </div>
+        {/snippet}
+
         <!-- Tabs Selector -->
         <Tabs.Root bind:value={activeTab} class="w-full">
           <Tabs.List variant="line" class="w-full mb-3">
@@ -97,25 +116,6 @@
             <Tabs.Trigger value="deno">deno</Tabs.Trigger>
             <Tabs.Trigger value="bun">bun</Tabs.Trigger>
           </Tabs.List>
-
-          {#snippet codeBlock(cmd)}
-            <div class="relative flex items-center justify-between p-3 bg-muted/30 border border-border rounded-md font-mono text-[11px] text-foreground group">
-              <span class="select-all overflow-x-auto whitespace-nowrap scrollbar-none pr-10">{cmd}</span>
-              
-              <button
-                type="button"
-                onclick={handleCopy}
-                class="absolute right-3 top-1/2 -translate-y-1/2 flex items-center justify-center h-6 w-6 text-muted-foreground hover:text-foreground transition-colors cursor-pointer"
-                title="Copy command to clipboard"
-              >
-                {#if copied}
-                  <Check class="h-3.5 w-3.5 text-foreground animate-in fade-in duration-200" />
-                {:else}
-                  <Copy class="h-3.5 w-3.5" />
-                {/if}
-              </button>
-            </div>
-          {/snippet}
 
           <Tabs.Content value="pnpm" class="focus-visible:outline-none">
             {@render codeBlock(commands.pnpm)}

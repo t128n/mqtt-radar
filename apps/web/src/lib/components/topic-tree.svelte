@@ -2,6 +2,8 @@
 <script lang="ts">
   import VirtualList from "@sveltejs/svelte-virtual-list";
   import TopicTreeNode from "./topic-tree-node.svelte";
+  import Search from "@lucide/svelte/icons/search";
+  import X from "@lucide/svelte/icons/x";
 
   // Props
   let {
@@ -23,12 +25,22 @@
   // Keep track of collapsed nodes by fullName. By default folders are expanded.
   let collapsedNodes = $state<Record<string, boolean>>({});
 
-  // Parse list of topics to a tree structure recursively
+  // Local search query state
+  let searchQuery = $state("");
+
+  // Parse list of topics to a tree structure recursively, optionally filtered by searchQuery
   let rootNodes = $derived.by(() => {
     const root: Map<string, ParsedNode> = new Map();
+    const query = searchQuery.toLowerCase().trim();
 
     for (const topic of topics) {
       if (!topic) continue;
+
+      // If we have a query, ensure either the topic matches
+      if (query && !topic.toLowerCase().includes(query)) {
+        continue;
+      }
+
       const parts = topic.split("/");
       let currentMap = root;
       let pathAccumulator = "";
@@ -84,7 +96,8 @@
       for (const node of nodes) {
         flat.push({ node, level });
         const hasChildren = node.children.size > 0;
-        if (hasChildren && !collapsedNodes[node.fullName]) {
+        const isCollapsed = searchQuery.trim() !== "" ? false : collapsedNodes[node.fullName];
+        if (hasChildren && !isCollapsed) {
           traverse(Array.from(node.children.values()), level + 1);
         }
       }
@@ -96,25 +109,53 @@
 </script>
 
 <div class="flex-grow flex flex-col min-h-0 h-full w-full pr-1">
+  <!-- Search input bar -->
+  <div class="relative w-full pb-2 mb-2 border-b border-border/40 shrink-0 select-none">
+    <Search size="11" class="absolute left-2.5 top-[7px] text-muted-foreground/60" />
+    <input
+      type="text"
+      placeholder="Filter topics..."
+      bind:value={searchQuery}
+      class="w-full bg-muted/20 border border-border/50 rounded px-7 py-1.5 text-[10.5px] font-mono text-foreground placeholder:text-muted-foreground/45 focus:border-border/80 focus:bg-muted/30 focus:outline-none transition-colors"
+    />
+    {#if searchQuery}
+      <button
+        type="button"
+        class="absolute right-2 top-[7px] p-0.5 rounded text-muted-foreground hover:text-foreground cursor-pointer transition-colors"
+        onclick={() => searchQuery = ""}
+      >
+        <X size="11" />
+      </button>
+    {/if}
+  </div>
+
   {#if visibleNodes.length > 0}
-    <VirtualList items={visibleNodes} let:item>
-      <TopicTreeNode
-        node={item.node}
-        level={item.level}
-        expanded={!collapsedNodes[item.node.fullName]}
-        {selectedTopic}
-        onSelect={(newTopic) => {
-          selectedTopic = newTopic;
-          if (onSelect) onSelect(newTopic);
-        }}
-        onToggle={() => {
-          collapsedNodes[item.node.fullName] = !collapsedNodes[item.node.fullName];
-        }}
-      />
-    </VirtualList>
+    <div class="flex-grow min-h-0 h-full w-full relative">
+      <VirtualList items={visibleNodes} let:item>
+        <TopicTreeNode
+          node={item.node}
+          level={item.level}
+          expanded={searchQuery.trim() !== "" ? true : !collapsedNodes[item.node.fullName]}
+          {selectedTopic}
+          onSelect={(newTopic) => {
+            selectedTopic = newTopic;
+            if (onSelect) onSelect(newTopic);
+          }}
+          onToggle={() => {
+            if (searchQuery.trim() === "") {
+              collapsedNodes[item.node.fullName] = !collapsedNodes[item.node.fullName];
+            }
+          }}
+        />
+      </VirtualList>
+    </div>
   {:else}
-    <div class="opacity-30 flex items-center justify-center h-full py-8 text-[11px]">
-      No topics active.
+    <div class="opacity-30 flex items-center justify-center h-full py-8 text-[11px] font-mono select-none">
+      {#if searchQuery}
+        No topics match filter.
+      {:else}
+        No topics active.
+      {/if}
     </div>
   {/if}
 </div>

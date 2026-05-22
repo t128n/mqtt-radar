@@ -17,6 +17,41 @@
   // Broker Status State
   let brokerStatus = $state<{ connected: boolean; url?: string; clientId?: string } | null>(null);
 
+  // Connection display helper
+  let displayStatus = $derived.by(() => {
+    if (!connection.origin) {
+      return {
+        text: "Offline",
+        dotClass: "bg-muted-foreground/30 border-muted-foreground/20",
+        textClass: "text-muted-foreground/50"
+      };
+    }
+    
+    if (brokerStatus && brokerStatus.connected) {
+      let host = "Connected";
+      if (brokerStatus.url) {
+        try {
+          const urlStr = brokerStatus.url.replace(/^mqtt(s)?:\/\//, "http://");
+          const parsed = new URL(urlStr);
+          host = parsed.host;
+        } catch {
+          host = brokerStatus.url.replace(/^mqtt(s)?:\/\//, "");
+        }
+      }
+      return {
+        text: host,
+        dotClass: "bg-emerald-500 border-emerald-600 shadow-[0_0_8px_rgba(16,185,129,0.4)]",
+        textClass: "text-foreground font-medium"
+      };
+    }
+    
+    return {
+      text: "Broker Offline",
+      dotClass: "bg-amber-500 border-amber-600 shadow-[0_0_8px_rgba(245,158,11,0.4)]",
+      textClass: "text-muted-foreground/75"
+    };
+  });
+
   // Derived client
   let client = $derived(
     connection.origin
@@ -122,18 +157,43 @@
 </script>
 
 <Popover.Root>
-  <Popover.Trigger class={cn(buttonVariants({ variant: "outline", size: "sm" }), "flex items-center gap-2.5 font-mono text-[11px] select-none cursor-pointer")}>
-    <!-- Connector Status -->
-    <span class={connection.origin ? "text-foreground font-medium" : "text-muted-foreground/60"}>
-      connector
-    </span>
-    
-    <span class="text-border/50">/</span>
+  <Popover.Trigger class={cn(buttonVariants({ variant: "outline", size: "sm" }), "flex items-center gap-1 font-mono text-[10px] select-none cursor-pointer px-2.5 py-1 rounded-md border border-border/80 bg-background hover:bg-muted/30 transition-colors")}>
+    <!-- Left: Connector Segment -->
+    <div class="flex items-center gap-1.5 pr-0.5">
+      <span class={cn("h-1.5 w-1.5 rounded-full shrink-0 border transition-all duration-300", 
+        connection.origin 
+          ? "bg-emerald-500 border-emerald-600 shadow-[0_0_8px_rgba(16,185,129,0.4)]" 
+          : "bg-muted-foreground/30 border-muted-foreground/20"
+      )}></span>
+      <span class={cn(
+        connection.origin ? "text-foreground font-medium" : "text-muted-foreground/50"
+      )}>
+        connector
+      </span>
+    </div>
 
-    <!-- Broker Status -->
-    <span class={brokerStatus && brokerStatus.connected ? "text-foreground font-medium" : "text-muted-foreground/60"}>
-      broker
-    </span>
+    <!-- Divider -->
+    <span class="text-muted-foreground/25 font-light px-0.5">/</span>
+
+    <!-- Right: Broker Segment -->
+    <div class="flex items-center gap-1.5 pl-0.5">
+      <span class={cn("h-1.5 w-1.5 rounded-full shrink-0 border transition-all duration-300", 
+        !connection.origin 
+          ? "bg-muted-foreground/30 border-muted-foreground/20" 
+          : (brokerStatus?.connected 
+              ? "bg-emerald-500 border-emerald-600 shadow-[0_0_8px_rgba(16,185,129,0.4)]" 
+              : "bg-amber-500 border-amber-600 shadow-[0_0_8px_rgba(245,158,11,0.4)]")
+      )}></span>
+      <span class={cn(
+        !connection.origin 
+          ? "text-muted-foreground/50" 
+          : (brokerStatus?.connected 
+              ? "text-foreground font-medium truncate max-w-[120px]" 
+              : "text-muted-foreground/75")
+      )}>
+        {brokerStatus?.connected ? displayStatus.text : "broker"}
+      </span>
+    </div>
   </Popover.Trigger>
   
   <Popover.Content class="w-80 max-h-[85vh] overflow-y-auto p-4 border border-border/80 bg-background/95 backdrop-blur-md shadow-lg rounded-xl scrollbar-none" align="end">

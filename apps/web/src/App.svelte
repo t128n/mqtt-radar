@@ -13,6 +13,13 @@
   import FolderTree from "@lucide/svelte/icons/folder-tree";
   import Activity from "@lucide/svelte/icons/activity";
   import Braces from "@lucide/svelte/icons/braces";
+  import Search from "@lucide/svelte/icons/search";
+  import X from "@lucide/svelte/icons/x";
+  import Play from "@lucide/svelte/icons/play";
+  import Pause from "@lucide/svelte/icons/pause";
+  import Trash2 from "@lucide/svelte/icons/trash-2";
+  import Pin from "@lucide/svelte/icons/pin";
+  import PinOff from "@lucide/svelte/icons/pin-off";
 
   // Connection State
   let connection = $state<{ origin: string | null }>({
@@ -26,31 +33,50 @@
   let selectedTopic = $state("");
   let selectedMessage = $state<{ topic: string; payload: string; id: string; time: number } | null>(null);
 
-  // Derived states
-  let cachedMessagesCount = $derived(Math.min(cachedMessages.length, 500));
-  let activeMessageIds = $derived(new Set(cachedMessages.slice(0, 500).map((m) => m.id)));
+  // QoL States
+  let isPaused = $state(false);
+  let bufferedCount = $state(0);
+  let autoPauseOnSelect = $state(true);
+  let pinnedMessages = $state<Array<{ topic: string; payload: string; id: string; time: number }>>([]);
+  let searchQuery = $state("");
 
-  // Filter messages by selected topic path
+  // Derived states
+  let cachedMessagesCount = $derived(cachedMessages.length);
+
+  // Filter messages by search query
   let filteredMessages = $derived.by(() => {
-    if (!selectedTopic) return cachedMessages;
+    if (!searchQuery.trim()) {
+      return cachedMessages;
+    }
+    const query = searchQuery.toLowerCase().trim();
     return cachedMessages.filter(
-      (msg) => msg.topic === selectedTopic || msg.topic.startsWith(selectedTopic + "/")
+      (msg) =>
+        msg.topic.toLowerCase().includes(query) ||
+        msg.payload.toLowerCase().includes(query)
     );
   });
 
   // The list of messages to display in the UI
   let displayedMessages = $derived(filteredMessages);
 
-  // Clear selection if the active filter changes
-  let prevSelectedTopic = $state(selectedTopic);
+  // Save pinned messages to localStorage
+  $effect(() => {
+    try {
+      localStorage.setItem("mqtt_radar_pinned_messages", JSON.stringify(pinnedMessages));
+    } catch (e) {
+      console.error("Failed to save pinned messages", e);
+    }
+  });
+
+  // Clear selection and cached messages if the active filter changes
+  let prevSelectedTopic = "";
   $effect(() => {
     if (selectedTopic !== prevSelectedTopic) {
       selectedMessage = null;
       prevSelectedTopic = selectedTopic;
-      // Shrink buffer immediately if we deselected
-      if (cachedMessages.length > 500) {
-        cachedMessages = cachedMessages.slice(0, 500);
-      }
+      cachedMessages = [];
+      messageBuffer = [];
+      bufferedCount = 0;
     }
   });
 
@@ -76,65 +102,87 @@
     }
   });
 
+  // Dynamic Shiki Syntax Highlighting
+  let highlightedPayload = $state("");
+
+  $effect(() => {
+    if (!selectedMessage) {
+      highlightedPayload = "";
+      return;
+    }
+
+    const payload = selectedMessage.payload;
+    let formatted = payload;
+    let lang = "text";
+
+    try {
+      const parsed = JSON.parse(payload);
+      formatted = JSON.stringify(parsed, null, 2);
+      lang = "json";
+    } catch {
+      if (payload.trim().startsWith("<")) {
+        lang = "xml";
+      }
+    }
+
+    import("shiki").then(({ codeToHtml }) => {
+      codeToHtml(formatted, {
+        lang,
+        themes: {
+          light: "github-light",
+          dark: "github-dark",
+        },
+      })
+        .then((html) => {
+          highlightedPayload = html;
+        })
+        .catch((err) => {
+          console.error("Failed to highlight payload:", err);
+          highlightedPayload = "";
+        });
+    }).catch((err) => {
+      console.error("Failed to load shiki module:", err);
+      highlightedPayload = "";
+    });
+  });
+
   // High-performance buffering for active MQTT feeds
   const knownTopics = new Set<string>();
   let messageBuffer: Array<{ topic: string; payload: string; id: string; time: number }> = [];
   let newTopicsBuffer: string[] = [];
   let flushScheduled = false;
-  let streamContainer = $state<HTMLElement | undefined>();
 
   function scheduleFlush() {
     if (flushScheduled) return;
     flushScheduled = true;
-    requestAnimationFrame(async () => {
-      const hadSelected = !!selectedMessage;
-      let prevIndex = -1;
-      if (hadSelected) {
-        prevIndex = displayedMessages.findIndex(m => m.id === selectedMessage!.id);
-      }
-
+    requestAnimationFrame(() => {
       if (newTopicsBuffer.length > 0) {
         topicsList = [...topicsList, ...newTopicsBuffer];
         newTopicsBuffer = [];
       }
       
-      if (messageBuffer.length > 0) {
-        let newList = [...messageBuffer, ...cachedMessages];
-        
-        if (selectedMessage) {
-           const selectedIndex = newList.findIndex(m => m.id === selectedMessage!.id);
-           if (selectedIndex !== -1) {
-              const keepLength = Math.max(500, selectedIndex + 1);
-              cachedMessages = newList.slice(0, keepLength);
-           } else {
-              cachedMessages = newList.slice(0, 500);
-           }
-        } else {
-           cachedMessages = newList.slice(0, 500);
-        }
+      if (!isPaused && messageBuffer.length > 0) {
+        cachedMessages = [...messageBuffer, ...cachedMessages].slice(0, 500);
         messageBuffer = [];
+        bufferedCount = 0;
       }
       flushScheduled = false;
-
-      // Adjust scroll to track the selected message
-      if (hadSelected && prevIndex !== -1 && streamContainer) {
-        await tick();
-        const newIndex = displayedMessages.findIndex(m => m.id === selectedMessage!.id);
-        if (newIndex > prevIndex) {
-          const viewport = streamContainer.firstElementChild as HTMLElement;
-          if (viewport) {
-            // ~52px per row (approximate based on styling)
-            viewport.scrollTop += (newIndex - prevIndex) * 52;
-          }
-        }
-      }
     });
+  }
+
+  function resumeStream() {
+    isPaused = false;
+    bufferedCount = 0;
+    if (messageBuffer.length > 0) {
+      cachedMessages = [...messageBuffer, ...cachedMessages].slice(0, 500);
+      messageBuffer = [];
+    }
   }
 
   // SSE event source connection
   let eventSource: EventSource | null = null;
 
-  function connectSSE() {
+  function connectSSE(filter: string) {
     const activeOrigin = connection.origin;
     if (!activeOrigin) return;
 
@@ -149,25 +197,36 @@
     messageBuffer = [];
     newTopicsBuffer = [];
     flushScheduled = false;
+    bufferedCount = 0;
 
-    const sseUrl = `${activeOrigin}/api/events`;
+    const sseUrl = `${activeOrigin}/api/events?filter=${encodeURIComponent(filter || "#")}`;
     const es = new EventSource(sseUrl);
 
+    // Discovery connection sends lightweight topic events
+    es.addEventListener("topic", (event) => {
+      try {
+        const data = JSON.parse(event.data);
+        if (data && data.topic) {
+          if (!knownTopics.has(data.topic)) {
+            knownTopics.add(data.topic);
+            newTopicsBuffer.push(data.topic);
+            scheduleFlush();
+          }
+        }
+      } catch (err) {
+        console.error("Failed to parse SSE topic event:", err);
+      }
+    });
+
+    // Data connection sends full MQTT message events (already filtered by backend)
     es.addEventListener("message", (event) => {
       try {
         const msg = JSON.parse(event.data);
         if (msg && msg.topic) {
-          // 1. Check unique topics using O(1) Set
-          if (!knownTopics.has(msg.topic)) {
-            knownTopics.add(msg.topic);
-            newTopicsBuffer.push(msg.topic);
-          }
-
-          // 2. Add message to the buffer
           messageBuffer.unshift({
             topic: msg.topic,
             payload: msg.payload,
-            id: event.lastEventId || Math.random().toString(36).substr(2, 9),
+            id: `${msg.topic}_${Date.now()}_${Math.random().toString(36).substring(2, 11)}`,
             time: Date.now(),
           });
 
@@ -176,10 +235,14 @@
             messageBuffer.length = 500;
           }
 
+          if (isPaused) {
+            bufferedCount = messageBuffer.length;
+          }
+
           scheduleFlush();
         }
       } catch (err) {
-        console.error("Failed to parse SSE message:", err);
+        console.error("Failed to parse SSE message event:", err);
       }
     });
 
@@ -214,15 +277,24 @@
       dialogOpen = true;
     }
 
+    try {
+      const stored = localStorage.getItem("mqtt_radar_pinned_messages");
+      if (stored) {
+        pinnedMessages = JSON.parse(stored);
+      }
+    } catch (e) {
+      console.error("Failed to load pinned messages", e);
+    }
+
     return () => {
       if (eventSource) eventSource.close();
     };
   });
 
-  // Synchronize SSE subscription to active pairing connection
+  // Synchronize SSE subscription to active pairing connection and filter path
   $effect(() => {
     if (connection.origin) {
-      connectSSE();
+      connectSSE(selectedTopic);
     } else {
       if (eventSource) {
         eventSource.close();
@@ -231,6 +303,8 @@
       topicsList = [];
       cachedMessages = [];
       selectedMessage = null;
+      messageBuffer = [];
+      bufferedCount = 0;
     }
   });
 </script>
@@ -268,43 +342,197 @@
     <Resizable.Pane defaultSize={30}>
       <WorkspacePane title="Stream" icon={Activity}>
         {#snippet headerRight()}
-          <span class="font-mono text-[10px] text-muted-foreground bg-muted/30 px-1.5 py-0.5 rounded border border-border/50 select-all">
-            {cachedMessagesCount} / 500
-          </span>
+          <div class="flex items-center gap-1.5 select-none">
+            {#if isPaused}
+              <span class="font-mono text-[9px] text-amber-500 bg-amber-500/10 px-1.5 py-0.5 rounded border border-amber-500/20 uppercase font-semibold">
+                PAUSED
+              </span>
+            {/if}
+            <span class="font-mono text-[10px] text-muted-foreground bg-muted/30 px-1.5 py-0.5 rounded border border-border/50 select-all">
+              {cachedMessagesCount} / 500
+            </span>
+          </div>
         {/snippet}
 
-        {#if displayedMessages.length > 0}
-          <div class="flex-grow flex flex-col min-h-0 h-full w-full pr-1" bind:this={streamContainer}>
-            <VirtualList items={displayedMessages} let:item={msg}>
-              {@const isSelected = selectedMessage?.id === msg.id}
-              {@const isStale = !activeMessageIds.has(msg.id)}
-              <button
-                type="button"
-                class="w-full flex items-baseline justify-between py-1.5 px-2 rounded text-left font-mono text-[10.5px] transition-colors border group cursor-pointer mb-1 {isSelected ? 'bg-muted border-border' : isStale ? 'bg-yellow-500/10 border-yellow-500/30 text-yellow-700 dark:text-yellow-400 opacity-80' : 'hover:bg-muted/30 border-transparent'}"
-                onclick={() => {
-                  selectedMessage = isSelected ? null : msg;
-                  if (!selectedMessage && cachedMessages.length > 500) {
-                    cachedMessages = cachedMessages.slice(0, 500);
-                  }
-                }}
-              >
-                <div class="flex flex-col gap-0.5 min-w-0 pr-4">
-                  <span class="text-foreground font-semibold truncate group-hover:text-primary transition-colors">
-                    {msg.topic}
+        {#if connection.origin}
+          <div class="flex-grow flex flex-col min-h-0 h-full w-full">
+            <!-- Search & Controls Action Bar -->
+            <div class="flex items-center gap-2 border-b border-border/40 pb-2 mb-2 shrink-0 pr-1">
+              <!-- Search Input -->
+              <div class="relative flex-grow">
+                <Search size="11" class="absolute left-2.5 top-1/2 -translate-y-1/2 text-muted-foreground/60" />
+                <input
+                  type="text"
+                  placeholder="Filter stream (topic or payload)..."
+                  bind:value={searchQuery}
+                  class="w-full bg-muted/20 border border-border/50 rounded px-7 py-1.5 text-[10.5px] font-mono text-foreground placeholder:text-muted-foreground/45 focus:border-border/80 focus:bg-muted/30 focus:outline-none transition-colors"
+                />
+                {#if searchQuery}
+                  <button
+                    type="button"
+                    class="absolute right-2 top-1/2 -translate-y-1/2 p-0.5 rounded text-muted-foreground hover:text-foreground cursor-pointer transition-colors"
+                    onclick={() => searchQuery = ""}
+                  >
+                    <X size="11" />
+                  </button>
+                {/if}
+              </div>
+
+              <!-- Stream Controls -->
+              <div class="flex items-center gap-1 shrink-0">
+                <!-- Play/Pause -->
+                <button
+                  type="button"
+                  class="p-1.5 rounded border border-border/40 hover:bg-muted/40 text-muted-foreground hover:text-foreground transition-all cursor-pointer flex items-center justify-center h-7 w-7 {isPaused ? 'bg-amber-500/10! border-amber-500/20! text-amber-500 hover:text-amber-600' : ''}"
+                  title={isPaused ? "Resume Stream" : "Pause Stream"}
+                  onclick={() => {
+                    if (isPaused) {
+                      resumeStream();
+                    } else {
+                      isPaused = true;
+                    }
+                  }}
+                >
+                  {#if isPaused}
+                    <Play size="11" />
+                  {:else}
+                    <Pause size="11" />
+                  {/if}
+                </button>
+
+                <!-- Clear -->
+                <button
+                  type="button"
+                  class="p-1.5 rounded border border-border/40 hover:bg-muted/40 text-muted-foreground hover:text-foreground transition-colors cursor-pointer flex items-center justify-center h-7 w-7"
+                  title="Clear Stream"
+                  onclick={() => {
+                    cachedMessages = [];
+                    messageBuffer = [];
+                    bufferedCount = 0;
+                    selectedMessage = null;
+                  }}
+                >
+                  <Trash2 size="11" />
+                </button>
+              </div>
+            </div>
+
+            <!-- Pinned Section -->
+            {#if pinnedMessages.length > 0}
+              <div class="flex flex-col border-b border-border/40 pb-2 mb-2 shrink-0 pr-1 select-none">
+                <div class="flex items-center justify-between px-2 py-0.5 mb-1 text-[9px] text-muted-foreground uppercase font-bold tracking-wider">
+                  <span class="flex items-center gap-1 text-primary">
+                    <Pin size="10" class="fill-primary text-primary" /> Pinned
                   </span>
-                  <span class="text-muted-foreground/75 truncate max-w-full block text-[10px]">
-                    {msg.payload}
-                  </span>
+                  <button
+                    type="button"
+                    class="hover:text-foreground transition-colors cursor-pointer normal-case text-[9px] font-normal"
+                    onclick={() => pinnedMessages = []}
+                  >
+                    Unpin All
+                  </button>
                 </div>
-                <span class="text-muted-foreground/40 text-[9px] shrink-0 font-medium">
-                  {new Date(msg.time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
-                </span>
-              </button>
-            </VirtualList>
-          </div>
-        {:else if connection.origin}
-          <div class="opacity-30 flex items-center justify-center h-full text-[11px]">
-            No messages received.
+                <div class="flex flex-col gap-1 px-0.5 max-h-40 overflow-y-auto">
+                  {#each pinnedMessages as msg (msg.id)}
+                    {@const isSelected = selectedMessage?.id === msg.id}
+                    <div class="relative group">
+                      <button
+                        type="button"
+                        class="w-full flex items-baseline justify-between py-1.5 pl-2 pr-8 rounded text-left font-mono text-[10.5px] transition-colors border group/btn cursor-pointer {isSelected ? 'bg-muted border-border' : 'hover:bg-muted/30 border-transparent bg-muted/5'}"
+                        onclick={() => {
+                          selectedMessage = isSelected ? null : msg;
+                          if (selectedMessage && autoPauseOnSelect) {
+                            isPaused = true;
+                          }
+                        }}
+                      >
+                        <div class="flex flex-col gap-0.5 min-w-0 pr-4">
+                          <span class="text-foreground font-semibold truncate group-hover/btn:text-primary transition-colors">
+                            {msg.topic}
+                          </span>
+                          <span class="text-muted-foreground/75 truncate max-w-full block text-[10px]">
+                            {msg.payload}
+                          </span>
+                        </div>
+                        <span class="text-muted-foreground/40 text-[9px] shrink-0 font-medium mr-1">
+                          {new Date(msg.time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
+                        </span>
+                      </button>
+                      <button
+                        type="button"
+                        class="absolute right-2 top-1/2 -translate-y-1/2 p-1 rounded hover:bg-muted text-primary cursor-pointer transition-colors"
+                        title="Unpin message"
+                        onclick={(e) => {
+                          e.stopPropagation();
+                          pinnedMessages = pinnedMessages.filter(p => p.id !== msg.id);
+                        }}
+                      >
+                        <PinOff size="11" />
+                      </button>
+                    </div>
+                  {/each}
+                </div>
+              </div>
+            {/if}
+
+            <!-- Message Stream List -->
+            <div class="flex-grow flex flex-col min-h-0 h-full w-full relative">
+              {#if displayedMessages.length > 0}
+                <div class="flex-grow flex flex-col min-h-0 h-full w-full pr-1">
+                  <VirtualList items={displayedMessages} let:item={msg}>
+                    {@const isSelected = selectedMessage?.id === msg.id}
+                    {@const isPinned = pinnedMessages.some(p => p.id === msg.id)}
+                    <div class="relative group mb-1">
+                      <button
+                        type="button"
+                        class="w-full flex items-baseline justify-between py-1.5 pl-2 pr-8 rounded text-left font-mono text-[10.5px] transition-colors border group/btn cursor-pointer {isSelected ? 'bg-muted border-border' : 'hover:bg-muted/30 border-transparent'}"
+                        onclick={() => {
+                          selectedMessage = isSelected ? null : msg;
+                          if (selectedMessage && autoPauseOnSelect) {
+                            isPaused = true;
+                          }
+                        }}
+                      >
+                        <div class="flex flex-col gap-0.5 min-w-0 pr-4">
+                          <span class="text-foreground font-semibold truncate group-hover/btn:text-primary transition-colors">
+                            {msg.topic}
+                          </span>
+                          <span class="text-muted-foreground/75 truncate max-w-full block text-[10px]">
+                            {msg.payload}
+                          </span>
+                        </div>
+                        <span class="text-muted-foreground/40 text-[9px] shrink-0 font-medium mr-1">
+                          {new Date(msg.time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
+                        </span>
+                      </button>
+                      <button
+                        type="button"
+                        class="absolute right-2 top-1/2 -translate-y-1/2 p-1 rounded hover:bg-muted text-muted-foreground cursor-pointer transition-colors opacity-0 group-hover:opacity-100 {isPinned ? 'opacity-100! text-primary' : ''}"
+                        title={isPinned ? "Unpin message" : "Pin message"}
+                        onclick={(e) => {
+                          e.stopPropagation();
+                          if (isPinned) {
+                            pinnedMessages = pinnedMessages.filter(p => p.id !== msg.id);
+                          } else {
+                            pinnedMessages = [...pinnedMessages, msg];
+                          }
+                        }}
+                      >
+                        <Pin size="11" class={isPinned ? "fill-primary text-primary" : ""} />
+                      </button>
+                    </div>
+                  </VirtualList>
+                </div>
+              {:else}
+                <div class="opacity-30 flex items-center justify-center h-full text-[11px] font-mono select-none">
+                  {#if searchQuery}
+                    No messages match filter.
+                  {:else}
+                    No messages received.
+                  {/if}
+                </div>
+              {/if}
+            </div>
           </div>
         {:else}
           <div class="opacity-30 flex items-center justify-center h-full text-[11px]">
@@ -320,9 +548,28 @@
     <Resizable.Pane defaultSize={40}>
       <WorkspacePane title="Inspect" icon={Braces}>
         {#snippet headerRight()}
-          <span class="font-mono text-[10px] text-muted-foreground uppercase">
-            {selectedMessage ? (isJson ? "application/json" : "text/plain") : "application/json"}
-          </span>
+          <div class="flex items-center gap-1.5 select-none">
+            {#if selectedMessage}
+              {@const isPinned = pinnedMessages.some(p => p.id === selectedMessage?.id)}
+              <button
+                type="button"
+                class="font-mono text-[9px] flex items-center gap-1 px-1.5 py-0.5 rounded border transition-colors cursor-pointer {isPinned ? 'bg-primary/10 border-primary/20 text-primary hover:bg-primary/20' : 'bg-muted/30 border-border hover:bg-muted/50 text-muted-foreground hover:text-foreground'}"
+                onclick={() => {
+                  if (isPinned) {
+                    pinnedMessages = pinnedMessages.filter(p => p.id !== selectedMessage!.id);
+                  } else {
+                    pinnedMessages = [...pinnedMessages, selectedMessage!];
+                  }
+                }}
+              >
+                <Pin size="9.5" class={isPinned ? "fill-primary text-primary" : ""} />
+                {isPinned ? "Pinned" : "Pin"}
+              </button>
+            {/if}
+            <span class="font-mono text-[10px] text-muted-foreground uppercase">
+              {selectedMessage ? (isJson ? "application/json" : "text/plain") : "application/json"}
+            </span>
+          </div>
         {/snippet}
 
         {#if selectedMessage}
@@ -339,8 +586,12 @@
               </div>
             </div>
 
-            <!-- Formatted Pre block -->
-            <pre class="bg-muted/10 border border-border/60 rounded-md p-3 font-mono text-[11px] leading-relaxed text-foreground select-all overflow-x-auto overflow-y-auto grow">{formattedPayload}</pre>
+            <!-- Formatted Pre block with Shiki highlighting -->
+            {#if highlightedPayload}
+              {@html highlightedPayload}
+            {:else}
+              <pre class="bg-muted/10 border border-border/60 rounded-md p-3 font-mono text-[11px] leading-relaxed text-foreground select-all overflow-x-auto overflow-y-auto grow">{formattedPayload}</pre>
+            {/if}
           </div>
         {:else}
           <div class="opacity-30 flex items-center justify-center h-full text-[11px]">

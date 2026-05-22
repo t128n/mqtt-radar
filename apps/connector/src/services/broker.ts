@@ -19,9 +19,12 @@ export type MqttMessage = {
 };
 
 class BrokerService extends EventEmitter {
-  private client: MqttClient | null = null;
+  private discoveryClient: MqttClient | null = null;
+  private dataClient: MqttClient | null = null;
   private config: BrokerConfig | null = null;
   private logger: Logger | null = null;
+  private currentDataFilter: string | null = null;
+  private activeDataFilterPatterns: string[] = [];
 
   /** Attach the root pino logger once on startup. */
   setLogger(logger: Logger) {
@@ -33,8 +36,27 @@ class BrokerService extends EventEmitter {
     return this.logger;
   }
 
+  private async subscribeWithFallback(client: MqttClient, filter: string): Promise<string> {
+    try {
+      await client.subscribeAsync(filter);
+      this.log.info({ filter }, "subscribed successfully");
+      return filter;
+    } catch (err: any) {
+      if (filter === "#") {
+        this.log.warn(
+          { err },
+          "Failed to subscribe to '#'. Trying fallback '+/#'..."
+        );
+        await client.subscribeAsync("+/#");
+        this.log.info("subscribed successfully to fallback '+/#'");
+        return "+/#";
+      }
+      throw err;
+    }
+  }
+
   async connect(config: BrokerConfig): Promise<void> {
-    if (this.client) {
+    if (this.discoveryClient || this.dataClient) {
       this.log.info(
         { url: this.config?.url },
         "existing connection found — disconnecting before reconnect",
@@ -42,74 +64,137 @@ class BrokerService extends EventEmitter {
       await this.disconnect();
     }
 
-    this.log.info({ url: config.url, clientId: config.clientId }, "connecting to MQTT broker");
-
-    this.client = await mqtt.connectAsync(config.url, {
-      ...(config.clientId !== undefined && { clientId: config.clientId }),
-      ...(config.username !== undefined && { username: config.username }),
-      ...(config.password !== undefined && { password: config.password }),
-      ...(config.ca !== undefined && { ca: config.ca }),
-      ...(config.cert !== undefined && { cert: config.cert }),
-      ...(config.key !== undefined && { key: config.key }),
-      ...(config.rejectUnauthorized !== undefined && { rejectUnauthorized: config.rejectUnauthorized }),
-    });
-
     this.config = config;
+    const baseClientId = config.clientId || `mqtt-radar-${Math.random().toString(36).substring(2, 7)}`;
+    const discoveryClientId = `${baseClientId}-discovery`;
+    const dataClientId = `${baseClientId}-data`;
 
-    this.log.info({ url: config.url }, "connected to MQTT broker");
-
-    this.client.on("message", (topic, payload) => {
-      const msg: MqttMessage = { topic, payload: payload.toString() };
-      this.log.debug({ topic, payloadBytes: payload.length }, "mqtt message received");
-      this.emit("message", msg);
-    });
-
-    this.client.on("error", (err) => {
-      this.log.error({ err, url: this.config?.url }, "MQTT client error");
-    });
-
-    this.client.on("reconnect", () => {
-      this.log.warn({ url: this.config?.url }, "MQTT client reconnecting");
-    });
-
-    this.client.on("offline", () => {
-      this.log.warn({ url: this.config?.url }, "MQTT client went offline");
-    });
-
-    this.client.on("close", () => {
-      this.log.info({ url: this.config?.url }, "MQTT client connection closed");
-    });
+    this.log.info({ url: config.url, discoveryClientId, dataClientId }, "connecting dual MQTT clients");
 
     try {
-      await this.client.subscribeAsync("#");
-      this.log.info({ url: config.url }, "subscribed to all topics (#)");
-    } catch (err: any) {
-      this.log.warn(
-        { err, url: config.url },
-        "Failed to subscribe to root wildcard (#). The broker may restrict wildcard subscriptions. Trying fallback (+/#)...",
-      );
-      try {
-        await this.client.subscribeAsync("+/#");
-        this.log.info({ url: config.url }, "subscribed to fallback wildcard (+/#)");
-      } catch (fallbackErr: any) {
-        this.log.error(
-          { err: fallbackErr, url: config.url },
-          "Failed to subscribe to fallback wildcard (+/#). Connection remains established, but no active root subscription is running.",
-        );
+      // 1. Connect and configure the Discovery Client
+      this.discoveryClient = await mqtt.connectAsync(config.url, {
+        ...config,
+        clientId: discoveryClientId,
+      });
+
+      this.log.info({ url: config.url }, "discoveryClient connected successfully");
+
+      this.discoveryClient.on("message", (topic) => {
+        this.log.debug({ topic }, "discovery message received (extracting topic only)");
+        this.emit("topic", topic);
+      });
+
+      this.discoveryClient.on("error", (err) => {
+        this.log.error({ err, client: "discovery" }, "MQTT client error");
+      });
+
+      await this.subscribeWithFallback(this.discoveryClient, "#");
+
+      // 2. Connect and configure the Data Client
+      this.dataClient = await mqtt.connectAsync(config.url, {
+        ...config,
+        clientId: dataClientId,
+      });
+
+      this.log.info({ url: config.url }, "dataClient connected successfully");
+
+      this.dataClient.on("message", (topic, payload) => {
+        const msg: MqttMessage = { topic, payload: payload.toString() };
+        this.log.debug({ topic, payloadBytes: payload.length }, "mqtt data message received");
+        this.emit("message", msg);
+      });
+
+      this.dataClient.on("error", (err) => {
+        this.log.error({ err, client: "data" }, "MQTT client error");
+      });
+
+      // Subscribe dataClient to the default filter (or whatever was requested)
+      const initialFilter = this.currentDataFilter || "#";
+      const targetPatterns = (initialFilter === "#" || initialFilter === "+/#")
+        ? [initialFilter]
+        : [initialFilter, `${initialFilter}/#`];
+
+      const activePatterns: string[] = [];
+      for (const pattern of targetPatterns) {
+        const activePattern = await this.subscribeWithFallback(this.dataClient, pattern);
+        activePatterns.push(activePattern);
+      }
+      this.activeDataFilterPatterns = activePatterns;
+      this.currentDataFilter = initialFilter;
+
+    } catch (err) {
+      this.log.error({ err }, "failed to establish dual MQTT connections");
+      await this.disconnect();
+      throw err;
+    }
+  }
+
+  async updateDataSubscription(filter: string): Promise<void> {
+    const targetFilter = filter || "#";
+    if (this.currentDataFilter === targetFilter) {
+      this.log.debug({ filter: targetFilter }, "data filter unchanged, skipping update");
+      return;
+    }
+
+    const oldPatterns = this.activeDataFilterPatterns;
+    this.currentDataFilter = targetFilter;
+
+    if (!this.dataClient) {
+      this.log.debug({ filter: targetFilter }, "dataClient not connected yet, storing filter for later");
+      return;
+    }
+
+    const targetPatterns = (targetFilter === "#" || targetFilter === "+/#")
+      ? [targetFilter]
+      : [targetFilter, `${targetFilter}/#`];
+
+    this.log.info({ oldPatterns, newFilterPatterns: targetPatterns }, "updating dataClient subscriptions");
+
+    // Subscribe to new patterns
+    const activePatterns: string[] = [];
+    for (const pattern of targetPatterns) {
+      const activePattern = await this.subscribeWithFallback(this.dataClient, pattern);
+      activePatterns.push(activePattern);
+    }
+    this.activeDataFilterPatterns = activePatterns;
+
+    // Unsubscribe from any old patterns that are not in the new active patterns list
+    for (const oldPattern of oldPatterns) {
+      if (!activePatterns.includes(oldPattern)) {
+        try {
+          await this.dataClient.unsubscribeAsync(oldPattern);
+          this.log.info({ oldPattern }, "unsubscribed dataClient from old pattern");
+        } catch (err) {
+          this.log.warn({ err, oldPattern }, "failed to unsubscribe dataClient from old pattern");
+        }
       }
     }
   }
 
   async disconnect(): Promise<void> {
-    if (!this.client) {
-      this.log.debug("disconnect called but no active client");
+    if (!this.discoveryClient && !this.dataClient) {
+      this.log.debug("disconnect called but no active clients");
       return;
     }
-    this.log.info({ url: this.config?.url }, "disconnecting from MQTT broker");
-    await this.client.endAsync();
-    this.client = null;
+
+    this.log.info({ url: this.config?.url }, "disconnecting dual MQTT clients");
+
+    const disconnects: Promise<void>[] = [];
+    if (this.discoveryClient) {
+      disconnects.push(this.discoveryClient.endAsync(true));
+      this.discoveryClient = null;
+    }
+    if (this.dataClient) {
+      disconnects.push(this.dataClient.endAsync(true));
+      this.dataClient = null;
+    }
+
+    await Promise.all(disconnects);
     this.config = null;
-    this.log.info("disconnected from MQTT broker");
+    this.activeDataFilterPatterns = [];
+    this.emit("disconnect");
+    this.log.info("disconnected both MQTT clients");
   }
 
   getStatus(): { connected: false } | { connected: true; url: string; clientId?: string } {
@@ -122,9 +207,9 @@ class BrokerService extends EventEmitter {
   }
 
   isConnected(): boolean {
-    return this.client !== null;
+    return this.discoveryClient !== null && this.dataClient !== null;
   }
 }
 
-/** Singleton — one MQTT connection shared across the entire process. */
+/** Singleton — dual MQTT connection shared across the entire process. */
 export const brokerService = new BrokerService();

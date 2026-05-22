@@ -28,7 +28,7 @@ async function main() {
     },
     pretty({
       colorize: true,
-    })
+    }),
   );
 
   // Give the broker service access to the root logger so its
@@ -90,9 +90,7 @@ async function main() {
   // Bind strictly to loopback config.host
   serve({ fetch: app.fetch, port, hostname: config.host }, (info) => {
     const isDev =
-      isDevelopment ||
-      process.env.NODE_ENV === "development" ||
-      process.env.NODE_ENV === "dev";
+      isDevelopment || process.env.NODE_ENV === "development" || process.env.NODE_ENV === "dev";
     const frontendUrl = isDev ? "http://localhost:5173" : "https://t128n.github.io/mqtt-radar";
     const displayHost = config.host === "0.0.0.0" ? "127.0.0.1" : config.host;
     const pairingUrl = `${frontendUrl}/?connector=http://${displayHost}:${info.port}`;
@@ -105,7 +103,6 @@ async function main() {
       },
       `mqtt-radar-connector listening on ${config.host}`,
     );
-
   });
 }
 

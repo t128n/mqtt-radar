@@ -181,10 +181,18 @@
 
   // SSE event source connection
   let eventSource: EventSource | null = null;
+  let sseRetryCount = 0;
+  let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  const MAX_RETRIES = 5;
 
   function connectSSE(filter: string) {
     const activeOrigin = connection.origin;
     if (!activeOrigin) return;
+
+    if (reconnectTimer) {
+      clearTimeout(reconnectTimer);
+      reconnectTimer = null;
+    }
 
     if (eventSource) {
       eventSource.close();
@@ -201,6 +209,15 @@
 
     const sseUrl = `${activeOrigin}/api/events?filter=${encodeURIComponent(filter || "#")}`;
     const es = new EventSource(sseUrl);
+
+    es.addEventListener("open", () => {
+      console.log("SSE connection established");
+      sseRetryCount = 0;
+    });
+
+    es.addEventListener("ping", () => {
+      sseRetryCount = 0;
+    });
 
     // Discovery connection sends lightweight topic events (legacy fallback)
     es.addEventListener("topic", (event) => {
@@ -295,20 +312,46 @@
     es.addEventListener("error", async (err) => {
       console.error("SSE connection error:", err);
 
-      // If the connection drops or fails, double check if the pairing is still valid.
-      if (activeOrigin) {
-        const isValid = await verifyPairing(activeOrigin);
-        if (!isValid) {
-          console.warn("Connector is no longer reachable. Resetting connection...");
+      if (eventSource) {
+        eventSource.close();
+        eventSource = null;
+      }
 
-          // Clear connection state
-          connection = { origin: null };
+      if (sseRetryCount < MAX_RETRIES) {
+        sseRetryCount++;
+        // Exponential backoff with jitter
+        const delay = Math.min(1000 * Math.pow(2, sseRetryCount) + Math.random() * 1000, 30000);
+        console.warn(`SSE connection dropped. Retrying in ${Math.round(delay)}ms (attempt ${sseRetryCount}/${MAX_RETRIES})...`);
 
-          // Clear localStorage
-          localStorage.removeItem("mqtt_radar_connector_origin");
+        reconnectTimer = setTimeout(() => {
+          connectSSE(filter);
+        }, delay);
+      } else {
+        console.warn(`SSE connection failed after ${MAX_RETRIES} attempts. Verifying pairing...`);
 
-          // Show the pairing dialog so the user can easily pair again
-          dialogOpen = true;
+        // If the connection drops or fails permanently, double check if the pairing is still valid.
+        if (activeOrigin) {
+          const isValid = await verifyPairing(activeOrigin);
+          if (!isValid) {
+            console.warn("Connector is no longer reachable. Resetting connection...");
+
+            // Clear connection state
+            connection = { origin: null };
+
+            // Clear localStorage
+            localStorage.removeItem("mqtt_radar_connector_origin");
+
+            // Show the pairing dialog so the user can easily pair again
+            dialogOpen = true;
+          } else {
+            // Pairing is still valid, so maybe the connector is alive but SSE is failing.
+            // Reset retry count and try again after a longer delay (10s) to avoid fast spinning.
+            console.warn("Connector is still reachable, but SSE stream failed. Retrying in 10s...");
+            sseRetryCount = 0;
+            reconnectTimer = setTimeout(() => {
+              connectSSE(filter);
+            }, 10000);
+          }
         }
       }
     });
@@ -333,6 +376,7 @@
     }
 
     return () => {
+      if (reconnectTimer) clearTimeout(reconnectTimer);
       if (eventSource) eventSource.close();
     };
   });
@@ -340,8 +384,17 @@
   // Synchronize SSE subscription to active pairing connection and filter path
   $effect(() => {
     if (connection.origin) {
+      if (reconnectTimer) {
+        clearTimeout(reconnectTimer);
+        reconnectTimer = null;
+      }
+      sseRetryCount = 0;
       connectSSE(selectedTopic);
     } else {
+      if (reconnectTimer) {
+        clearTimeout(reconnectTimer);
+        reconnectTimer = null;
+      }
       if (eventSource) {
         eventSource.close();
         eventSource = null;

@@ -1,6 +1,7 @@
 import { Hono } from "hono";
 import { brokerService, type BrokerConfig } from "~/services/broker";
 import type { AppEnv } from "~/types";
+import { mapBrokerError } from "~/utils/error-mapper";
 
 export const brokerRoutes = new Hono<AppEnv>()
   /**
@@ -32,7 +33,7 @@ export const brokerRoutes = new Hono<AppEnv>()
       return c.json({ ok: true, status: brokerService.getStatus() }, 201);
     } catch (err) {
       log.error({ err, url: body.url }, "failed to connect to broker");
-      return c.json({ error: "failed to connect", detail: String(err) }, 502);
+      return c.json({ error: "failed to connect", detail: mapBrokerError(err) }, 502);
     }
   })
 

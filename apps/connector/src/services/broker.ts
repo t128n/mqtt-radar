@@ -43,10 +43,7 @@ class BrokerService extends EventEmitter {
       return filter;
     } catch (err: any) {
       if (filter === "#") {
-        this.log.warn(
-          { err },
-          "Failed to subscribe to '#'. Trying fallback '+/#'..."
-        );
+        this.log.warn({ err }, "Failed to subscribe to '#'. Trying fallback '+/#'...");
         await client.subscribeAsync("+/#");
         this.log.info("subscribed successfully to fallback '+/#'");
         return "+/#";
@@ -65,11 +62,15 @@ class BrokerService extends EventEmitter {
     }
 
     this.config = config;
-    const baseClientId = config.clientId || `mqtt-radar-${Math.random().toString(36).substring(2, 7)}`;
+    const baseClientId =
+      config.clientId || `mqtt-radar-${Math.random().toString(36).substring(2, 7)}`;
     const discoveryClientId = `${baseClientId}-discovery`;
     const dataClientId = `${baseClientId}-data`;
 
-    this.log.info({ url: config.url, discoveryClientId, dataClientId }, "connecting dual MQTT clients");
+    this.log.info(
+      { url: config.url, discoveryClientId, dataClientId },
+      "connecting dual MQTT clients",
+    );
 
     try {
       // 1. Connect and configure the Discovery Client
@@ -111,9 +112,10 @@ class BrokerService extends EventEmitter {
 
       // Subscribe dataClient to the default filter (or whatever was requested)
       const initialFilter = this.currentDataFilter || "#";
-      const targetPatterns = (initialFilter === "#" || initialFilter === "+/#")
-        ? [initialFilter]
-        : [initialFilter, `${initialFilter}/#`];
+      const targetPatterns =
+        initialFilter === "#" || initialFilter === "+/#"
+          ? [initialFilter]
+          : [initialFilter, `${initialFilter}/#`];
 
       const activePatterns: string[] = [];
       for (const pattern of targetPatterns) {
@@ -122,7 +124,6 @@ class BrokerService extends EventEmitter {
       }
       this.activeDataFilterPatterns = activePatterns;
       this.currentDataFilter = initialFilter;
-
     } catch (err) {
       this.log.error({ err }, "failed to establish dual MQTT connections");
       await this.disconnect();
@@ -141,15 +142,22 @@ class BrokerService extends EventEmitter {
     this.currentDataFilter = targetFilter;
 
     if (!this.dataClient) {
-      this.log.debug({ filter: targetFilter }, "dataClient not connected yet, storing filter for later");
+      this.log.debug(
+        { filter: targetFilter },
+        "dataClient not connected yet, storing filter for later",
+      );
       return;
     }
 
-    const targetPatterns = (targetFilter === "#" || targetFilter === "+/#")
-      ? [targetFilter]
-      : [targetFilter, `${targetFilter}/#`];
+    const targetPatterns =
+      targetFilter === "#" || targetFilter === "+/#"
+        ? [targetFilter]
+        : [targetFilter, `${targetFilter}/#`];
 
-    this.log.info({ oldPatterns, newFilterPatterns: targetPatterns }, "updating dataClient subscriptions");
+    this.log.info(
+      { oldPatterns, newFilterPatterns: targetPatterns },
+      "updating dataClient subscriptions",
+    );
 
     // Subscribe to new patterns
     const activePatterns: string[] = [];

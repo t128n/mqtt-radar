@@ -12,12 +12,18 @@ import { cors } from "hono/cors";
 import { isAllowedOrigin } from "~/utils/cors";
 import { exec } from "node:child_process";
 import { isDevelopment } from "std-env";
+import { config } from "~/services/config";
 
 async function main() {
-  const port = await getPort({ port: 3881, portRange: [3881, 3900], name: "mqtt-radar-connector" });
+  let port: number;
+  if (config.port !== undefined) {
+    port = config.port;
+  } else {
+    port = await getPort({ port: 3881, portRange: [3881, 3900], name: "mqtt-radar-connector" });
+  }
 
   const rootLogger = pino({
-    level: process.env.LOG_LEVEL ?? "info",
+    level: config.logLevel,
     transport: {
       target: "pino-pretty",
       options: {
@@ -82,30 +88,42 @@ async function main() {
     return c.json({ error: "internal server error" }, 500);
   });
 
-  // Bind strictly to loopback 127.0.0.1
-  serve({ fetch: app.fetch, port, hostname: "127.0.0.1" }, (info) => {
-    const isDev = isDevelopment || !process.env.NODE_ENV || process.env.NODE_ENV === "development" || process.env.NODE_ENV === "dev";
+  // Bind strictly to loopback config.host
+  serve({ fetch: app.fetch, port, hostname: config.host }, (info) => {
+    const isDev =
+      isDevelopment ||
+      !process.env.NODE_ENV ||
+      process.env.NODE_ENV === "development" ||
+      process.env.NODE_ENV === "dev";
     const frontendUrl = isDev ? "http://localhost:5173" : "https://mqtt.t128n.dev";
-    const pairingUrl = `${frontendUrl}/?connector=http://127.0.0.1:${info.port}`;
+    const displayHost = config.host === "0.0.0.0" ? "127.0.0.1" : config.host;
+    const pairingUrl = `${frontendUrl}/?connector=http://${displayHost}:${info.port}`;
 
-    rootLogger.info({
-      port: info.port,
-      pairingUrl,
-      instructions: "Open the pairingUrl in your browser to automatically pair the frontend."
-    }, "mqtt-radar-connector listening on loopback");
+    rootLogger.info(
+      {
+        port: info.port,
+        pairingUrl,
+        instructions: "Open the pairingUrl in your browser to automatically pair the frontend.",
+      },
+      `mqtt-radar-connector listening on ${config.host}`,
+    );
 
     // Automatically open pairing URL in default browser
-    let openCmd = "open";
-    if (process.platform === "win32") openCmd = "start";
-    else if (process.platform === "linux") openCmd = "xdg-open";
+    if (config.openBrowser) {
+      let openCmd = "open";
+      if (process.platform === "win32") openCmd = "start";
+      else if (process.platform === "linux") openCmd = "xdg-open";
 
-    exec(`${openCmd} "${pairingUrl}"`, (err) => {
-      if (err) {
-        rootLogger.error({ err }, "failed to open browser automatically");
-      } else {
-        rootLogger.info("automatically opened pairing URL in browser");
-      }
-    });
+      exec(`${openCmd} "${pairingUrl}"`, (err) => {
+        if (err) {
+          rootLogger.error({ err }, "failed to open browser automatically");
+        } else {
+          rootLogger.info("automatically opened pairing URL in browser");
+        }
+      });
+    } else {
+      rootLogger.info("automatic browser open disabled");
+    }
   });
 }
 

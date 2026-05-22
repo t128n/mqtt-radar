@@ -9,6 +9,7 @@
     "lint": "oxlint"
   },
   "dependencies": {
+    "@bomb.sh/args": "^0.3.1",
     "@hono/node-server": "^2.0.3",
     "@hono/structured-logger": "^0.1.0",
     "@hono/valibot-validator": "^0.6.1",

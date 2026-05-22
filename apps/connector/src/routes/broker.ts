@@ -15,7 +15,7 @@ const brokerConfigSchema = v.object({
       } catch {
         return false;
       }
-    }, "Invalid URL format")
+    }, "Invalid URL format"),
   ),
   clientId: v.optional(v.string("clientId must be a string")),
   username: v.optional(v.string("username must be a string")),
@@ -34,27 +34,23 @@ export const brokerRoutes = new Hono<AppEnv>()
    */
   .post(
     "/",
-    vValidator(
-      "json",
-      brokerConfigSchema,
-      (result, c) => {
-        const log = c.var.logger.child({ handler: "POST /api/broker" });
-        if (!result.success) {
-          log.warn({ issues: result.issues }, "validation failed");
+    vValidator("json", brokerConfigSchema, (result, c) => {
+      const log = c.var.logger.child({ handler: "POST /api/broker" });
+      if (!result.success) {
+        log.warn({ issues: result.issues }, "validation failed");
 
-          const urlIssue = result.issues.find((issue) => issue.path?.[0]?.key === "url");
-          if (urlIssue) {
-            const inputVal = urlIssue.input;
-            if (inputVal === undefined || inputVal === null || inputVal === "") {
-              return c.json({ error: "url is required" }, 422);
-            }
-            return c.json({ error: urlIssue.message || "Invalid URL format" }, 400);
+        const urlIssue = result.issues.find((issue) => issue.path?.[0]?.key === "url");
+        if (urlIssue) {
+          const inputVal = urlIssue.input;
+          if (inputVal === undefined || inputVal === null || inputVal === "") {
+            return c.json({ error: "url is required" }, 422);
           }
-
-          return c.json({ error: result.issues[0].message || "Invalid request parameters" }, 400);
+          return c.json({ error: urlIssue.message || "Invalid URL format" }, 400);
         }
+
+        return c.json({ error: result.issues[0].message || "Invalid request parameters" }, 400);
       }
-    ),
+    }),
     async (c) => {
       const log = c.var.logger.child({ handler: "POST /api/broker" });
       const body = c.req.valid("json");
@@ -69,7 +65,7 @@ export const brokerRoutes = new Hono<AppEnv>()
         log.error({ err, url: body.url }, "failed to connect to broker");
         return c.json({ error: "failed to connect", detail: mapBrokerError(err) }, 502);
       }
-    }
+    },
   )
 
   /**

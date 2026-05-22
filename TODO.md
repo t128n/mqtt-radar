@@ -17,9 +17,8 @@
   - [x] Add Open Graph (OG) tags (`og:title`, `og:description`, `og:url`, `og:type`) for rich embeds on Discord/Slack/GitHub.
 
 ### 🏗️ Architecture & 0.1.0 Release Setup
-- [ ] **Support `npx` from GitHub**: Modify root `.gitignore` to allow tracking of pre-compiled binaries inside `apps/connector/dist/` so that executing `npx github:t128n/mqtt-radar` works out-of-the-box.
+- [x] **Support `npx` from GitHub**: Modify root `.gitignore` to allow tracking of pre-compiled binaries inside `apps/connector/dist/` so that executing `npx github:t128n/mqtt-radar` works out-of-the-box.
 - [ ] **API Validation with Valibot**: Add `valibot` schema validation to Hono backend endpoints (such as `POST /api/broker`) to check incoming parameters safely.
-- [ ] **Serve Web from Connector**: Allow the local connector to optionally serve the compiled Svelte frontend directly, bypassing CORS and browser Mixed-Content blocks when pairing with `https://mqtt.t128n.dev`.
 - [ ] **CLI Configuration**: Use a CLI parsing library (bomb.sh args) to support flags like `--port`, `--host`, `--log-level`, `--no-open`, and e.g. for backpressure, batching, ...
 - [ ] **Finalize Repo Structure**: 
   - Add root-level `README.md` explaining monorepo architecture and CLI usage.

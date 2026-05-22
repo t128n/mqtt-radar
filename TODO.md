@@ -1,7 +1,7 @@
 ## Tasks
 
 ### 🐛 Critical Bugs & Security
-- [ ] **Fix SSE Memory Leak**: Ensure all `brokerService` event listeners are cleaned up in the Hono SSE route when the broker disconnects (currently leaking in `apps/connector/src/routes/events.ts`).
+- [x] **Fix SSE Memory Leak**: Ensure all `brokerService` event listeners are cleaned up in the Hono SSE route when the broker disconnects (currently leaking in `apps/connector/src/routes/events.ts`).
 - [ ] **Secure Local Connector**: Restrict CORS wildcard policy.  Either from localhost:*, 127.0.0.1:* or t128n.github.io/mqtt-radar/. 
 
 ### ⚡ Performance & Reliability

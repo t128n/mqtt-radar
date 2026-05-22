@@ -6,8 +6,6 @@
 
 An **MQTT Topic Tree Explorer** and visualization dashboard.
 
----
-
 ## Architecture
 
 Standard web applications running in sandboxed web browsers cannot open raw TCP sockets to arbitrary MQTT brokers. 
@@ -27,8 +25,6 @@ Standard web applications running in sandboxed web browsers cannot open raw TCP 
                   └──────────────────────────────────────────────┘
 ```
 
----
-
 ## Quick Start
 
 Run **MQTT Radar** without cloning or installing using `npx`:
@@ -38,8 +34,6 @@ npx github:t128n/mqtt-radar
 ```
 
 This starts the Hono connector and opens the web dashboard in your browser.
-
----
 
 ## CLI Options
 
@@ -66,17 +60,6 @@ Increase the batch limit and batching window for high-throughput brokers:
 ```bash
 npx github:t128n/mqtt-radar --batch-window 250 --batch-limit 500 --backpressure-limit 2000
 ```
-
----
-
-## Repository Structure
-
-This is a **pnpm monorepo** containing:
-
-- `apps/web`: Svelte 5 + Tailwind CSS v4 + Vite frontend.
-- `apps/connector`: Hono + Valibot Node.js service. Builds a precompiled bundle into `apps/connector/dist/` for `npx` execution.
-
----
 
 ## Local Development
 
@@ -108,8 +91,6 @@ pnpm fmt        # Run oxfmt
 pnpm lint       # Run oxlint
 pnpm typecheck  # Perform TypeScript validation
 ```
-
----
 
 ## License
 

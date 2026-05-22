@@ -1,0 +1,14 @@
+{
+  "name": "mqtt-radar",
+  "version": "1.0.0",
+  "private": true,
+  "bin": {
+    "mqtt-radar": "./apps/connector/dist/mqtt-radar-connector.mjs"
+  },
+  "scripts": {
+    "dev": "NODE_ENV=dev pnpm -r --parallel dev",
+    "build": "pnpm -r build",
+    "fmt": "pnpm -r fmt",
+    "lint": "pnpm -r lint"
+  }
+}

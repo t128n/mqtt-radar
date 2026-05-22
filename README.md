@@ -4,8 +4,8 @@
 [![Svelte](https://img.shields.io/badge/Svelte-5-ff3e00.svg)](https://svelte.dev)
 [![Hono](https://img.shields.io/badge/Hono-4-e36002.svg)](https://hono.dev)
 
-An **MQTT Topic Tree Explorer** and visualization dashboard.
-
+ a minimal MQTT topic explorer.
+ 
 ## Architecture
 
 Standard web applications running in sandboxed web browsers cannot open raw TCP sockets to arbitrary MQTT brokers. 

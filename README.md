@@ -44,16 +44,15 @@ The local connector CLI supports configuration flags to customize ports, binding
 | `--port` | `-p` | `number` | `3881` | Connector HTTP server port. Auto-selects within `3881–3900` range on conflict. |
 | `--host` | `-h` | `string` | `127.0.0.1` | Loopback host address to bind the connector to. |
 | `--log-level`| `-l` | `string` | `info` | Logging verbosity (`trace`, `debug`, `info`, `warn`, `error`). Can be set via `LOG_LEVEL` env var. |
-| `--open` / `--no-open` | - | `boolean`| `true` | Toggle whether the web dashboard opens in your default browser on start. |
 | `--batch-window` | - | `number` | `100` | Buffer window duration (in milliseconds) for outbound broker messages streamed over SSE. |
 | `--batch-limit` | - | `number` | `100` | Maximum number of buffered broker events to chunk into a single SSE push. |
 | `--backpressure-limit` | - | `number` | `500` | Maximum number of queued SSE events held in memory before older events are dropped. |
 
 ### Examples
 
-Run on a custom port and disable automatic browser launch:
+Run on a custom port:
 ```bash
-npx github:t128n/mqtt-radar --port 4000 --no-open
+npx github:t128n/mqtt-radar --port 4000
 ```
 
 Increase the batch limit and batching window for high-throughput brokers:

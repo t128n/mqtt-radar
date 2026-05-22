@@ -4,16 +4,12 @@
 import { createRequire } from "node:module";
 import { createServer } from "node:net";
 import { networkInterfaces } from "node:os";
+import path from "node:path";
 import { STATUS_CODES, createServer as createServer$1 } from "node:http";
 import { Http2ServerRequest, constants } from "node:http2";
 import { Readable } from "node:stream";
-import { defineWebSocketHelper } from "hono/ws";
-import { requestId } from "hono/request-id";
 import { EventEmitter } from "node:events";
-import { validator } from "hono/validator";
-import { streamSSE } from "hono/streaming";
-import { cors } from "hono/cors";
-import { exec } from "node:child_process";
+import { fileURLToPath } from "node:url";
 //#region \0rolldown/runtime.js
 var __create = Object.create;
 var __defProp = Object.defineProperty;
@@ -21,6 +17,7 @@ var __getOwnPropDesc = Object.getOwnPropertyDescriptor;
 var __getOwnPropNames = Object.getOwnPropertyNames;
 var __getProtoOf = Object.getPrototypeOf;
 var __hasOwnProp = Object.prototype.hasOwnProperty;
+var __esmMin = (fn, res) => () => (fn && (res = fn(fn = 0)), res);
 var __commonJSMin = (cb, mod) => () => (mod || (cb((mod = { exports: {} }).exports, mod), cb = null), mod.exports);
 var __copyProps = (to, from, except, desc) => {
 	if (from && typeof from === "object" || typeof from === "function") for (var keys = __getOwnPropNames(from), i = 0, n = keys.length, key; i < n; i++) {
@@ -1049,26 +1046,7 @@ const getRequestListener = (fetchCallback, options = {}) => {
 		}
 	};
 };
-/**
-* @link https://developer.mozilla.org/en-US/docs/Web/API/CloseEvent
-*/
-const CloseEvent = globalThis.CloseEvent ?? class extends Event {
-	#eventInitDict;
-	constructor(type, eventInitDict = {}) {
-		super(type, eventInitDict);
-		this.#eventInitDict = eventInitDict;
-	}
-	get wasClean() {
-		return this.#eventInitDict.wasClean ?? false;
-	}
-	get code() {
-		return this.#eventInitDict.code ?? 0;
-	}
-	get reason() {
-		return this.#eventInitDict.reason ?? "";
-	}
-};
-const generateConnectionSymbol = () => Symbol("connection");
+globalThis.CloseEvent;
 const CONNECTION_SYMBOL_KEY = Symbol("CONNECTION_SYMBOL_KEY");
 const WAIT_FOR_WEBSOCKET_SYMBOL = Symbol("WAIT_FOR_WEBSOCKET_SYMBOL");
 const responseHeadersToSkip = new Set([
@@ -1169,73 +1147,6 @@ const setupWebSocket = (options) => {
 		wss.close();
 	});
 };
-defineWebSocketHelper(async (c, events, options) => {
-	if (c.req.header("upgrade")?.toLowerCase() !== "websocket") return;
-	const env = c.env;
-	const waitForWebSocket = env[WAIT_FOR_WEBSOCKET_SYMBOL];
-	if (!waitForWebSocket || !env.incoming) return new Response(null, { status: 500 });
-	const connectionSymbol = generateConnectionSymbol();
-	env[CONNECTION_SYMBOL_KEY] = connectionSymbol;
-	(async () => {
-		const ws = await waitForWebSocket(env.incoming, connectionSymbol);
-		const messagesReceivedInStarting = [];
-		const bufferMessage = (data, isBinary) => {
-			messagesReceivedInStarting.push([data, isBinary]);
-		};
-		ws.on("message", bufferMessage);
-		const ctx = {
-			binaryType: "arraybuffer",
-			close(code, reason) {
-				ws.close(code, reason);
-			},
-			protocol: ws.protocol,
-			raw: ws,
-			get readyState() {
-				return ws.readyState;
-			},
-			send(source, opts) {
-				ws.send(source, { compress: opts?.compress });
-			},
-			url: new URL(c.req.url)
-		};
-		try {
-			events?.onOpen?.(new Event("open"), ctx);
-		} catch (e) {
-			(options?.onError ?? console.error)(e);
-		}
-		const handleMessage = (data, isBinary) => {
-			const datas = Array.isArray(data) ? data : [data];
-			for (const data of datas) try {
-				events?.onMessage?.(new MessageEvent("message", { data: isBinary ? data instanceof ArrayBuffer ? data : data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength) : data.toString("utf-8") }), ctx);
-			} catch (e) {
-				(options?.onError ?? console.error)(e);
-			}
-		};
-		ws.off("message", bufferMessage);
-		for (const message of messagesReceivedInStarting) handleMessage(...message);
-		ws.on("message", (data, isBinary) => {
-			handleMessage(data, isBinary);
-		});
-		ws.on("close", (code, reason) => {
-			try {
-				events?.onClose?.(new CloseEvent("close", {
-					code,
-					reason: reason.toString()
-				}), ctx);
-			} catch (e) {
-				(options?.onError ?? console.error)(e);
-			}
-		});
-		ws.on("error", (error) => {
-			try {
-				events?.onError?.(new ErrorEvent("error", { error }), ctx);
-			} catch (e) {
-				(options?.onError ?? console.error)(e);
-			}
-		});
-	})();
-	return new Response();
-});
 const createAdaptorServer = (options) => {
 	const fetchCallback = options.fetch;
 	const requestListener = getRequestListener(fetchCallback, {
@@ -1292,6 +1203,34 @@ var compose = (middleware, onError, onNotFound) => {
 			return context;
 		}
 	};
+};
+//#endregion
+//#region ../../node_modules/.pnpm/hono@4.12.21/node_modules/hono/dist/http-exception.js
+var HTTPException = class extends Error {
+	res;
+	status;
+	/**
+	* Creates an instance of `HTTPException`.
+	* @param status - HTTP status code for the exception. Defaults to 500.
+	* @param options - Additional options for the exception.
+	*/
+	constructor(status = 500, options) {
+		super(options?.message, { cause: options?.cause });
+		this.res = options?.res;
+		this.status = status;
+	}
+	/**
+	* Returns the response object associated with the exception.
+	* If a response object is not provided, a new response is created with the error message and status code.
+	* @returns The response object.
+	*/
+	getResponse() {
+		if (this.res) return new Response(this.res.body, {
+			status: this.status,
+			headers: this.res.headers
+		});
+		return new Response(this.message, { status: this.status });
+	}
 };
 //#endregion
 //#region ../../node_modules/.pnpm/hono@4.12.21/node_modules/hono/dist/request/constants.js
@@ -3039,6 +2978,17 @@ var Hono = class extends Hono$1 {
 	}
 };
 //#endregion
+//#region ../../node_modules/.pnpm/hono@4.12.21/node_modules/hono/dist/middleware/request-id/request-id.js
+var requestId = ({ limitLength = 255, headerName = "X-Request-Id", generator = () => crypto.randomUUID() } = {}) => {
+	return async function requestId2(c, next) {
+		let reqId = headerName ? c.req.header(headerName) : void 0;
+		if (!reqId || reqId.length > limitLength || /[^\w\-=]/.test(reqId)) reqId = generator(c);
+		c.set("requestId", reqId);
+		if (headerName) c.header(headerName, reqId);
+		await next();
+	};
+};
+//#endregion
 //#region ../../node_modules/.pnpm/@hono+structured-logger@0.1.0_hono@4.12.21/node_modules/@hono/structured-logger/dist/index.js
 const now = typeof performance !== "undefined" ? () => performance.now() : () => Date.now();
 function defaultOnRequest(logger, c) {
@@ -4014,7 +3964,7 @@ var require_sonic_boom = /* @__PURE__ */ __commonJSMin(((exports, module) => {
 	const fs = __require("fs");
 	const EventEmitter$7 = __require("events");
 	const inherits = __require("util").inherits;
-	const path = __require("path");
+	const path$1 = __require("path");
 	const sleep = require_atomic_sleep();
 	const assert$1 = __require("assert");
 	const BUSY_WRITE_TIMEOUT = 100;
@@ -4054,13 +4004,13 @@ var require_sonic_boom = /* @__PURE__ */ __commonJSMin(((exports, module) => {
 		const flags = sonic.append ? "a" : "w";
 		const mode = sonic.mode;
 		if (sonic.sync) try {
-			if (sonic.mkdir) fs.mkdirSync(path.dirname(file), { recursive: true });
+			if (sonic.mkdir) fs.mkdirSync(path$1.dirname(file), { recursive: true });
 			fileOpened(null, fs.openSync(file, flags, mode));
 		} catch (err) {
 			fileOpened(err);
 			throw err;
 		}
-		else if (sonic.mkdir) fs.mkdir(path.dirname(file), { recursive: true }, (err) => {
+		else if (sonic.mkdir) fs.mkdir(path$1.dirname(file), { recursive: true }, (err) => {
 			if (err) return fileOpened(err);
 			fs.open(file, flags, mode, fileOpened);
 		});
@@ -4552,6 +4502,14 @@ var require_on_exit_leak_free = /* @__PURE__ */ __commonJSMin(((exports, module)
 	};
 }));
 //#endregion
+//#region ../../node_modules/.pnpm/tsdown@0.22.0_tsx@4.22.3_typescript@6.0.3/node_modules/tsdown/esm-shims.js
+var getFilename, getDirname, __dirname;
+var init_esm_shims = __esmMin((() => {
+	getFilename = () => fileURLToPath(import.meta.url);
+	getDirname = () => path.dirname(getFilename());
+	__dirname = /* @__PURE__ */ getDirname();
+}));
+//#endregion
 //#region ../../node_modules/.pnpm/thread-stream@4.2.0/node_modules/thread-stream/package.json
 var require_package$1 = /* @__PURE__ */ __commonJSMin(((exports, module) => {
 	module.exports = {
@@ -4663,6 +4621,7 @@ var require_indexes = /* @__PURE__ */ __commonJSMin(((exports, module) => {
 //#endregion
 //#region ../../node_modules/.pnpm/thread-stream@4.2.0/node_modules/thread-stream/index.js
 var require_thread_stream = /* @__PURE__ */ __commonJSMin(((exports, module) => {
+	init_esm_shims();
 	const { version } = require_package$1();
 	const { EventEmitter: EventEmitter$6 } = __require("events");
 	const { Worker: Worker$1 } = __require("worker_threads");
@@ -5114,11 +5073,12 @@ var require_thread_stream = /* @__PURE__ */ __commonJSMin(((exports, module) => 
 //#endregion
 //#region ../../node_modules/.pnpm/pino@10.3.1/node_modules/pino/lib/transport.js
 var require_transport = /* @__PURE__ */ __commonJSMin(((exports, module) => {
+	init_esm_shims();
 	const { createRequire: createRequire$1 } = __require("module");
 	const { existsSync } = __require("node:fs");
 	const getCallers = require_caller();
 	const { join, isAbsolute, sep } = __require("node:path");
-	const { fileURLToPath } = __require("node:url");
+	const { fileURLToPath: fileURLToPath$1 } = __require("node:url");
 	const sleep = require_atomic_sleep();
 	const onExit = require_on_exit_leak_free();
 	const ThreadStream = require_thread_stream();
@@ -5174,7 +5134,7 @@ var require_transport = /* @__PURE__ */ __commonJSMin(((exports, module) => {
 		if (!unquoted) return false;
 		let path = unquoted;
 		if (path.startsWith("file://")) try {
-			path = fileURLToPath(path);
+			path = fileURLToPath$1(path);
 		} catch {
 			return false;
 		}
@@ -5305,7 +5265,7 @@ var require_tools = /* @__PURE__ */ __commonJSMin(((exports, module) => {
 	const SonicBoom = require_sonic_boom();
 	const onExit = require_on_exit_leak_free();
 	const { lsCacheSym, chindingsSym, writeSym, serializersSym, formatOptsSym, endSym, stringifiersSym, stringifySym, stringifySafeSym, wildcardFirstSym, nestedKeySym, formattersSym, messageKeySym, errorKeySym, nestedKeyStrSym, msgPrefixSym } = require_symbols();
-	const { isMainThread } = __require("worker_threads");
+	const { isMainThread: isMainThread$1 } = __require("worker_threads");
 	const transport = require_transport();
 	const [nodeMajor] = process.versions.node.split(".").map((v) => Number(v));
 	const asJsonChan = diagChan.tracingChannel("pino_asJson");
@@ -5476,7 +5436,7 @@ var require_tools = /* @__PURE__ */ __commonJSMin(((exports, module) => {
 	function buildSafeSonicBoom(opts) {
 		const stream = new SonicBoom(opts);
 		stream.on("error", filterBrokenPipe);
-		if (!opts.sync && isMainThread) {
+		if (!opts.sync && isMainThread$1) {
 			onExit.register(stream, autoEnd);
 			stream.on("close", function() {
 				onExit.unregister(stream);
@@ -5591,7 +5551,7 @@ var require_tools = /* @__PURE__ */ __commonJSMin(((exports, module) => {
 }));
 //#endregion
 //#region ../../node_modules/.pnpm/pino@10.3.1/node_modules/pino/lib/constants.js
-var require_constants$5 = /* @__PURE__ */ __commonJSMin(((exports, module) => {
+var require_constants$6 = /* @__PURE__ */ __commonJSMin(((exports, module) => {
 	module.exports = {
 		DEFAULT_LEVELS: {
 			trace: 10,
@@ -5612,7 +5572,7 @@ var require_constants$5 = /* @__PURE__ */ __commonJSMin(((exports, module) => {
 var require_levels = /* @__PURE__ */ __commonJSMin(((exports, module) => {
 	const { lsCacheSym, levelValSym, useOnlyCustomLevelsSym, streamSym, formattersSym, hooksSym, levelCompSym } = require_symbols();
 	const { noop, genLog } = require_tools();
-	const { DEFAULT_LEVELS, SORTING_ORDER } = require_constants$5();
+	const { DEFAULT_LEVELS, SORTING_ORDER } = require_constants$6();
 	const levelMethods = {
 		fatal: (hook) => {
 			const logFatal = genLog(DEFAULT_LEVELS.fatal, hook);
@@ -6340,7 +6300,7 @@ var require_safe_stable_stringify = /* @__PURE__ */ __commonJSMin(((exports, mod
 //#region ../../node_modules/.pnpm/pino@10.3.1/node_modules/pino/lib/multistream.js
 var require_multistream = /* @__PURE__ */ __commonJSMin(((exports, module) => {
 	const metadata = Symbol.for("pino.metadata");
-	const { DEFAULT_LEVELS } = require_constants$5();
+	const { DEFAULT_LEVELS } = require_constants$6();
 	const DEFAULT_INFO_LEVEL = DEFAULT_LEVELS.info;
 	function multistream(streamsArray, opts) {
 		streamsArray = streamsArray || [];
@@ -6481,7 +6441,7 @@ var require_pino = /* @__PURE__ */ __commonJSMin(((exports, module) => {
 	const symbols = require_symbols();
 	const { configure } = require_safe_stable_stringify();
 	const { assertDefaultLevelFound, mappings, genLsCache, genLevelComparison, assertLevelComparison } = require_levels();
-	const { DEFAULT_LEVELS, SORTING_ORDER } = require_constants$5();
+	const { DEFAULT_LEVELS, SORTING_ORDER } = require_constants$6();
 	const { createArgsNormalizer, asChindings, buildSafeSonicBoom, buildFormatters, stringify, normalizeDestFileDescriptor, noop } = require_tools();
 	const { version } = require_meta();
 	const { chindingsSym, redactFmtSym, serializersSym, timeSym, timeSliceIndexSym, streamSym, stringifySym, stringifySafeSym, stringifiersSym, setLevelSym, endSym, formatOptsSym, messageKeySym, errorKeySym, nestedKeySym, mixinSym, levelCompSym, useOnlyCustomLevelsSym, formattersSym, hooksSym, nestedKeyStrSym, mixinMergeStrategySym, msgPrefixSym } = symbols;
@@ -6615,6 +6575,2873 @@ var require_pino = /* @__PURE__ */ __commonJSMin(((exports, module) => {
 	module.exports.version = version;
 	module.exports.default = pino;
 	module.exports.pino = pino;
+}));
+//#endregion
+//#region ../../node_modules/.pnpm/colorette@2.0.20/node_modules/colorette/index.cjs
+var require_colorette = /* @__PURE__ */ __commonJSMin(((exports) => {
+	Object.defineProperty(exports, "__esModule", { value: true });
+	var tty$1 = __require("tty");
+	function _interopNamespace(e) {
+		if (e && e.__esModule) return e;
+		var n = Object.create(null);
+		if (e) Object.keys(e).forEach(function(k) {
+			if (k !== "default") {
+				var d = Object.getOwnPropertyDescriptor(e, k);
+				Object.defineProperty(n, k, d.get ? d : {
+					enumerable: true,
+					get: function() {
+						return e[k];
+					}
+				});
+			}
+		});
+		n["default"] = e;
+		return Object.freeze(n);
+	}
+	var tty__namespace = /* @__PURE__ */ _interopNamespace(tty$1);
+	const { env = {}, argv = [], platform = "" } = typeof process === "undefined" ? {} : process;
+	const isDisabled = "NO_COLOR" in env || argv.includes("--no-color");
+	const isForced = "FORCE_COLOR" in env || argv.includes("--color");
+	const isWindows = platform === "win32";
+	const isDumbTerminal = env.TERM === "dumb";
+	const isCompatibleTerminal = tty__namespace && tty__namespace.isatty && tty__namespace.isatty(1) && env.TERM && !isDumbTerminal;
+	const isCI = "CI" in env && ("GITHUB_ACTIONS" in env || "GITLAB_CI" in env || "CIRCLECI" in env);
+	const isColorSupported = !isDisabled && (isForced || isWindows && !isDumbTerminal || isCompatibleTerminal || isCI);
+	const replaceClose = (index, string, close, replace, head = string.substring(0, index) + replace, tail = string.substring(index + close.length), next = tail.indexOf(close)) => head + (next < 0 ? tail : replaceClose(next, tail, close, replace));
+	const clearBleed = (index, string, open, close, replace) => index < 0 ? open + string + close : open + replaceClose(index, string, close, replace) + close;
+	const filterEmpty = (open, close, replace = open, at = open.length + 1) => (string) => string || !(string === "" || string === void 0) ? clearBleed(("" + string).indexOf(close, at), string, open, close, replace) : "";
+	const init = (open, close, replace) => filterEmpty(`\x1b[${open}m`, `\x1b[${close}m`, replace);
+	const colors = {
+		reset: init(0, 0),
+		bold: init(1, 22, "\x1B[22m\x1B[1m"),
+		dim: init(2, 22, "\x1B[22m\x1B[2m"),
+		italic: init(3, 23),
+		underline: init(4, 24),
+		inverse: init(7, 27),
+		hidden: init(8, 28),
+		strikethrough: init(9, 29),
+		black: init(30, 39),
+		red: init(31, 39),
+		green: init(32, 39),
+		yellow: init(33, 39),
+		blue: init(34, 39),
+		magenta: init(35, 39),
+		cyan: init(36, 39),
+		white: init(37, 39),
+		gray: init(90, 39),
+		bgBlack: init(40, 49),
+		bgRed: init(41, 49),
+		bgGreen: init(42, 49),
+		bgYellow: init(43, 49),
+		bgBlue: init(44, 49),
+		bgMagenta: init(45, 49),
+		bgCyan: init(46, 49),
+		bgWhite: init(47, 49),
+		blackBright: init(90, 39),
+		redBright: init(91, 39),
+		greenBright: init(92, 39),
+		yellowBright: init(93, 39),
+		blueBright: init(94, 39),
+		magentaBright: init(95, 39),
+		cyanBright: init(96, 39),
+		whiteBright: init(97, 39),
+		bgBlackBright: init(100, 49),
+		bgRedBright: init(101, 49),
+		bgGreenBright: init(102, 49),
+		bgYellowBright: init(103, 49),
+		bgBlueBright: init(104, 49),
+		bgMagentaBright: init(105, 49),
+		bgCyanBright: init(106, 49),
+		bgWhiteBright: init(107, 49)
+	};
+	const createColors = ({ useColor = isColorSupported } = {}) => useColor ? colors : Object.keys(colors).reduce((colors, key) => ({
+		...colors,
+		[key]: String
+	}), {});
+	const { reset, bold, dim, italic, underline, inverse, hidden, strikethrough, black, red, green, yellow, blue, magenta, cyan, white, gray, bgBlack, bgRed, bgGreen, bgYellow, bgBlue, bgMagenta, bgCyan, bgWhite, blackBright, redBright, greenBright, yellowBright, blueBright, magentaBright, cyanBright, whiteBright, bgBlackBright, bgRedBright, bgGreenBright, bgYellowBright, bgBlueBright, bgMagentaBright, bgCyanBright, bgWhiteBright } = createColors();
+	exports.bgBlack = bgBlack;
+	exports.bgBlackBright = bgBlackBright;
+	exports.bgBlue = bgBlue;
+	exports.bgBlueBright = bgBlueBright;
+	exports.bgCyan = bgCyan;
+	exports.bgCyanBright = bgCyanBright;
+	exports.bgGreen = bgGreen;
+	exports.bgGreenBright = bgGreenBright;
+	exports.bgMagenta = bgMagenta;
+	exports.bgMagentaBright = bgMagentaBright;
+	exports.bgRed = bgRed;
+	exports.bgRedBright = bgRedBright;
+	exports.bgWhite = bgWhite;
+	exports.bgWhiteBright = bgWhiteBright;
+	exports.bgYellow = bgYellow;
+	exports.bgYellowBright = bgYellowBright;
+	exports.black = black;
+	exports.blackBright = blackBright;
+	exports.blue = blue;
+	exports.blueBright = blueBright;
+	exports.bold = bold;
+	exports.createColors = createColors;
+	exports.cyan = cyan;
+	exports.cyanBright = cyanBright;
+	exports.dim = dim;
+	exports.gray = gray;
+	exports.green = green;
+	exports.greenBright = greenBright;
+	exports.hidden = hidden;
+	exports.inverse = inverse;
+	exports.isColorSupported = isColorSupported;
+	exports.italic = italic;
+	exports.magenta = magenta;
+	exports.magentaBright = magentaBright;
+	exports.red = red;
+	exports.redBright = redBright;
+	exports.reset = reset;
+	exports.strikethrough = strikethrough;
+	exports.underline = underline;
+	exports.white = white;
+	exports.whiteBright = whiteBright;
+	exports.yellow = yellow;
+	exports.yellowBright = yellowBright;
+}));
+//#endregion
+//#region ../../node_modules/.pnpm/wrappy@1.0.2/node_modules/wrappy/wrappy.js
+var require_wrappy = /* @__PURE__ */ __commonJSMin(((exports, module) => {
+	module.exports = wrappy;
+	function wrappy(fn, cb) {
+		if (fn && cb) return wrappy(fn)(cb);
+		if (typeof fn !== "function") throw new TypeError("need wrapper function");
+		Object.keys(fn).forEach(function(k) {
+			wrapper[k] = fn[k];
+		});
+		return wrapper;
+		function wrapper() {
+			var args = new Array(arguments.length);
+			for (var i = 0; i < args.length; i++) args[i] = arguments[i];
+			var ret = fn.apply(this, args);
+			var cb = args[args.length - 1];
+			if (typeof ret === "function" && ret !== cb) Object.keys(cb).forEach(function(k) {
+				ret[k] = cb[k];
+			});
+			return ret;
+		}
+	}
+}));
+//#endregion
+//#region ../../node_modules/.pnpm/once@1.4.0/node_modules/once/once.js
+var require_once = /* @__PURE__ */ __commonJSMin(((exports, module) => {
+	var wrappy = require_wrappy();
+	module.exports = wrappy(once);
+	module.exports.strict = wrappy(onceStrict);
+	once.proto = once(function() {
+		Object.defineProperty(Function.prototype, "once", {
+			value: function() {
+				return once(this);
+			},
+			configurable: true
+		});
+		Object.defineProperty(Function.prototype, "onceStrict", {
+			value: function() {
+				return onceStrict(this);
+			},
+			configurable: true
+		});
+	});
+	function once(fn) {
+		var f = function() {
+			if (f.called) return f.value;
+			f.called = true;
+			return f.value = fn.apply(this, arguments);
+		};
+		f.called = false;
+		return f;
+	}
+	function onceStrict(fn) {
+		var f = function() {
+			if (f.called) throw new Error(f.onceError);
+			f.called = true;
+			return f.value = fn.apply(this, arguments);
+		};
+		f.onceError = (fn.name || "Function wrapped with `once`") + " shouldn't be called more than once";
+		f.called = false;
+		return f;
+	}
+}));
+//#endregion
+//#region ../../node_modules/.pnpm/end-of-stream@1.4.5/node_modules/end-of-stream/index.js
+var require_end_of_stream$1 = /* @__PURE__ */ __commonJSMin(((exports, module) => {
+	var once = require_once();
+	var noop = function() {};
+	var qnt = global.Bare ? queueMicrotask : process.nextTick.bind(process);
+	var isRequest = function(stream) {
+		return stream.setHeader && typeof stream.abort === "function";
+	};
+	var isChildProcess = function(stream) {
+		return stream.stdio && Array.isArray(stream.stdio) && stream.stdio.length === 3;
+	};
+	var eos = function(stream, opts, callback) {
+		if (typeof opts === "function") return eos(stream, null, opts);
+		if (!opts) opts = {};
+		callback = once(callback || noop);
+		var ws = stream._writableState;
+		var rs = stream._readableState;
+		var readable = opts.readable || opts.readable !== false && stream.readable;
+		var writable = opts.writable || opts.writable !== false && stream.writable;
+		var cancelled = false;
+		var onlegacyfinish = function() {
+			if (!stream.writable) onfinish();
+		};
+		var onfinish = function() {
+			writable = false;
+			if (!readable) callback.call(stream);
+		};
+		var onend = function() {
+			readable = false;
+			if (!writable) callback.call(stream);
+		};
+		var onexit = function(exitCode) {
+			callback.call(stream, exitCode ? /* @__PURE__ */ new Error("exited with error code: " + exitCode) : null);
+		};
+		var onerror = function(err) {
+			callback.call(stream, err);
+		};
+		var onclose = function() {
+			qnt(onclosenexttick);
+		};
+		var onclosenexttick = function() {
+			if (cancelled) return;
+			if (readable && !(rs && rs.ended && !rs.destroyed)) return callback.call(stream, /* @__PURE__ */ new Error("premature close"));
+			if (writable && !(ws && ws.ended && !ws.destroyed)) return callback.call(stream, /* @__PURE__ */ new Error("premature close"));
+		};
+		var onrequest = function() {
+			stream.req.on("finish", onfinish);
+		};
+		if (isRequest(stream)) {
+			stream.on("complete", onfinish);
+			stream.on("abort", onclose);
+			if (stream.req) onrequest();
+			else stream.on("request", onrequest);
+		} else if (writable && !ws) {
+			stream.on("end", onlegacyfinish);
+			stream.on("close", onlegacyfinish);
+		}
+		if (isChildProcess(stream)) stream.on("exit", onexit);
+		stream.on("end", onend);
+		stream.on("finish", onfinish);
+		if (opts.error !== false) stream.on("error", onerror);
+		stream.on("close", onclose);
+		return function() {
+			cancelled = true;
+			stream.removeListener("complete", onfinish);
+			stream.removeListener("abort", onclose);
+			stream.removeListener("request", onrequest);
+			if (stream.req) stream.req.removeListener("finish", onfinish);
+			stream.removeListener("end", onlegacyfinish);
+			stream.removeListener("close", onlegacyfinish);
+			stream.removeListener("finish", onfinish);
+			stream.removeListener("exit", onexit);
+			stream.removeListener("end", onend);
+			stream.removeListener("error", onerror);
+			stream.removeListener("close", onclose);
+		};
+	};
+	module.exports = eos;
+}));
+//#endregion
+//#region ../../node_modules/.pnpm/pump@3.0.4/node_modules/pump/index.js
+var require_pump = /* @__PURE__ */ __commonJSMin(((exports, module) => {
+	var once = require_once();
+	var eos = require_end_of_stream$1();
+	var fs;
+	try {
+		fs = __require("fs");
+	} catch (e) {}
+	var noop = function() {};
+	var ancient = typeof process === "undefined" ? false : /^v?\.0/.test(process.version);
+	var isFn = function(fn) {
+		return typeof fn === "function";
+	};
+	var isFS = function(stream) {
+		if (!ancient) return false;
+		if (!fs) return false;
+		return (stream instanceof (fs.ReadStream || noop) || stream instanceof (fs.WriteStream || noop)) && isFn(stream.close);
+	};
+	var isRequest = function(stream) {
+		return stream.setHeader && isFn(stream.abort);
+	};
+	var destroyer = function(stream, reading, writing, callback) {
+		callback = once(callback);
+		var closed = false;
+		stream.on("close", function() {
+			closed = true;
+		});
+		eos(stream, {
+			readable: reading,
+			writable: writing
+		}, function(err) {
+			if (err) return callback(err);
+			closed = true;
+			callback();
+		});
+		var destroyed = false;
+		return function(err) {
+			if (closed) return;
+			if (destroyed) return;
+			destroyed = true;
+			if (isFS(stream)) return stream.close(noop);
+			if (isRequest(stream)) return stream.abort();
+			if (isFn(stream.destroy)) return stream.destroy();
+			callback(err || /* @__PURE__ */ new Error("stream was destroyed"));
+		};
+	};
+	var call = function(fn) {
+		fn();
+	};
+	var pipe = function(from, to) {
+		return from.pipe(to);
+	};
+	var pump = function() {
+		var streams = Array.prototype.slice.call(arguments);
+		var callback = isFn(streams[streams.length - 1] || noop) && streams.pop() || noop;
+		if (Array.isArray(streams[0])) streams = streams[0];
+		if (streams.length < 2) throw new Error("pump requires two streams per minimum");
+		var error;
+		var destroys = streams.map(function(stream, i) {
+			var reading = i < streams.length - 1;
+			return destroyer(stream, reading, i > 0, function(err) {
+				if (!error) error = err;
+				if (err) destroys.forEach(call);
+				if (reading) return;
+				destroys.forEach(call);
+				callback(error);
+			});
+		});
+		return streams.reduce(pipe);
+	};
+	module.exports = pump;
+}));
+//#endregion
+//#region ../../node_modules/.pnpm/split2@4.2.0/node_modules/split2/index.js
+var require_split2 = /* @__PURE__ */ __commonJSMin(((exports, module) => {
+	const { Transform: Transform$1 } = __require("stream");
+	const { StringDecoder } = __require("string_decoder");
+	const kLast = Symbol("last");
+	const kDecoder = Symbol("decoder");
+	function transform(chunk, enc, cb) {
+		let list;
+		if (this.overflow) {
+			list = this[kDecoder].write(chunk).split(this.matcher);
+			if (list.length === 1) return cb();
+			list.shift();
+			this.overflow = false;
+		} else {
+			this[kLast] += this[kDecoder].write(chunk);
+			list = this[kLast].split(this.matcher);
+		}
+		this[kLast] = list.pop();
+		for (let i = 0; i < list.length; i++) try {
+			push(this, this.mapper(list[i]));
+		} catch (error) {
+			return cb(error);
+		}
+		this.overflow = this[kLast].length > this.maxLength;
+		if (this.overflow && !this.skipOverflow) {
+			cb(/* @__PURE__ */ new Error("maximum buffer reached"));
+			return;
+		}
+		cb();
+	}
+	function flush(cb) {
+		this[kLast] += this[kDecoder].end();
+		if (this[kLast]) try {
+			push(this, this.mapper(this[kLast]));
+		} catch (error) {
+			return cb(error);
+		}
+		cb();
+	}
+	function push(self, val) {
+		if (val !== void 0) self.push(val);
+	}
+	function noop(incoming) {
+		return incoming;
+	}
+	function split(matcher, mapper, options) {
+		matcher = matcher || /\r?\n/;
+		mapper = mapper || noop;
+		options = options || {};
+		switch (arguments.length) {
+			case 1:
+				if (typeof matcher === "function") {
+					mapper = matcher;
+					matcher = /\r?\n/;
+				} else if (typeof matcher === "object" && !(matcher instanceof RegExp) && !matcher[Symbol.split]) {
+					options = matcher;
+					matcher = /\r?\n/;
+				}
+				break;
+			case 2: if (typeof matcher === "function") {
+				options = mapper;
+				mapper = matcher;
+				matcher = /\r?\n/;
+			} else if (typeof mapper === "object") {
+				options = mapper;
+				mapper = noop;
+			}
+		}
+		options = Object.assign({}, options);
+		options.autoDestroy = true;
+		options.transform = transform;
+		options.flush = flush;
+		options.readableObjectMode = true;
+		const stream = new Transform$1(options);
+		stream[kLast] = "";
+		stream[kDecoder] = new StringDecoder("utf8");
+		stream.matcher = matcher;
+		stream.mapper = mapper;
+		stream.maxLength = options.maxLength;
+		stream.skipOverflow = options.skipOverflow || false;
+		stream.overflow = false;
+		stream._destroy = function(err, cb) {
+			this._writableState.errorEmitted = false;
+			cb(err);
+		};
+		return stream;
+	}
+	module.exports = split;
+}));
+//#endregion
+//#region ../../node_modules/.pnpm/pino-abstract-transport@3.0.0/node_modules/pino-abstract-transport/index.js
+var require_pino_abstract_transport = /* @__PURE__ */ __commonJSMin(((exports, module) => {
+	const metadata = Symbol.for("pino.metadata");
+	const split = require_split2();
+	const { Duplex: Duplex$4 } = __require("stream");
+	const { parentPort, workerData } = __require("worker_threads");
+	function createDeferred() {
+		let resolve;
+		let reject;
+		const promise = new Promise((_resolve, _reject) => {
+			resolve = _resolve;
+			reject = _reject;
+		});
+		promise.resolve = resolve;
+		promise.reject = reject;
+		return promise;
+	}
+	module.exports = function build(fn, opts = {}) {
+		const waitForConfig = opts.expectPinoConfig === true && workerData?.workerData?.pinoWillSendConfig === true;
+		const parseLines = opts.parse === "lines";
+		const parseLine = typeof opts.parseLine === "function" ? opts.parseLine : JSON.parse;
+		const close = opts.close || defaultClose;
+		const stream = split(function(line) {
+			let value;
+			try {
+				value = parseLine(line);
+			} catch (error) {
+				this.emit("unknown", line, error);
+				return;
+			}
+			if (value === null) {
+				this.emit("unknown", line, "Null value ignored");
+				return;
+			}
+			if (typeof value !== "object") value = {
+				data: value,
+				time: Date.now()
+			};
+			if (stream[metadata]) {
+				stream.lastTime = value.time;
+				stream.lastLevel = value.level;
+				stream.lastObj = value;
+			}
+			if (parseLines) return line;
+			return value;
+		}, { autoDestroy: true });
+		stream._destroy = function(err, cb) {
+			const promise = close(err, cb);
+			if (promise && typeof promise.then === "function") promise.then(cb, cb);
+		};
+		if (opts.expectPinoConfig === true && workerData?.workerData?.pinoWillSendConfig !== true) setImmediate(() => {
+			stream.emit("error", /* @__PURE__ */ new Error("This transport is not compatible with the current version of pino. Please upgrade pino to the latest version."));
+		});
+		if (opts.metadata !== false) {
+			stream[metadata] = true;
+			stream.lastTime = 0;
+			stream.lastLevel = 0;
+			stream.lastObj = null;
+		}
+		if (waitForConfig) {
+			let pinoConfig = {};
+			const configReceived = createDeferred();
+			parentPort.on("message", function handleMessage(message) {
+				if (message.code === "PINO_CONFIG") {
+					pinoConfig = message.config;
+					configReceived.resolve();
+					parentPort.off("message", handleMessage);
+				}
+			});
+			Object.defineProperties(stream, {
+				levels: { get() {
+					return pinoConfig.levels;
+				} },
+				messageKey: { get() {
+					return pinoConfig.messageKey;
+				} },
+				errorKey: { get() {
+					return pinoConfig.errorKey;
+				} }
+			});
+			return configReceived.then(finish);
+		}
+		return finish();
+		function finish() {
+			let res = fn(stream);
+			if (res && typeof res.catch === "function") {
+				res.catch((err) => {
+					stream.destroy(err);
+				});
+				res = null;
+			} else if (opts.enablePipelining && res) return Duplex$4.from({
+				writable: stream,
+				readable: res
+			});
+			return stream;
+		}
+	};
+	function defaultClose(err, cb) {
+		process.nextTick(cb, err);
+	}
+}));
+//#endregion
+//#region ../../node_modules/.pnpm/pino-pretty@13.1.3/node_modules/pino-pretty/lib/constants.js
+var require_constants$5 = /* @__PURE__ */ __commonJSMin(((exports, module) => {
+	/**
+	* A set of property names that indicate the value represents an error object.
+	*
+	* @typedef {string[]} K_ERROR_LIKE_KEYS
+	*/
+	module.exports = {
+		DATE_FORMAT: "yyyy-mm-dd HH:MM:ss.l o",
+		DATE_FORMAT_SIMPLE: "HH:MM:ss.l",
+		/**
+		* @type {K_ERROR_LIKE_KEYS}
+		*/
+		ERROR_LIKE_KEYS: ["err", "error"],
+		MESSAGE_KEY: "msg",
+		LEVEL_KEY: "level",
+		LEVEL_LABEL: "levelLabel",
+		TIMESTAMP_KEY: "time",
+		LEVELS: {
+			default: "USERLVL",
+			60: "FATAL",
+			50: "ERROR",
+			40: "WARN",
+			30: "INFO",
+			20: "DEBUG",
+			10: "TRACE"
+		},
+		LEVEL_NAMES: {
+			fatal: 60,
+			error: 50,
+			warn: 40,
+			info: 30,
+			debug: 20,
+			trace: 10
+		},
+		LOGGER_KEYS: [
+			"pid",
+			"hostname",
+			"name",
+			"level",
+			"time",
+			"timestamp",
+			"caller"
+		]
+	};
+}));
+//#endregion
+//#region ../../node_modules/.pnpm/pino-pretty@13.1.3/node_modules/pino-pretty/lib/utils/get-level-label-data.js
+var require_get_level_label_data = /* @__PURE__ */ __commonJSMin(((exports, module) => {
+	module.exports = getLevelLabelData;
+	const { LEVELS, LEVEL_NAMES } = require_constants$5();
+	/**
+	* Given initial settings for custom levels/names and use of only custom props
+	* get the level label that corresponds with a given level number
+	*
+	* @param {boolean} useOnlyCustomProps
+	* @param {object} customLevels
+	* @param {object} customLevelNames
+	*
+	* @returns {function} A function that takes a number level and returns the level's label string
+	*/
+	function getLevelLabelData(useOnlyCustomProps, customLevels, customLevelNames) {
+		const levels = useOnlyCustomProps ? customLevels || LEVELS : Object.assign({}, LEVELS, customLevels);
+		const levelNames = useOnlyCustomProps ? customLevelNames || LEVEL_NAMES : Object.assign({}, LEVEL_NAMES, customLevelNames);
+		return function(level) {
+			let levelNum = "default";
+			if (Number.isInteger(+level)) levelNum = Object.prototype.hasOwnProperty.call(levels, level) ? level : levelNum;
+			else levelNum = Object.prototype.hasOwnProperty.call(levelNames, level.toLowerCase()) ? levelNames[level.toLowerCase()] : levelNum;
+			return [levels[levelNum], levelNum];
+		};
+	}
+}));
+//#endregion
+//#region ../../node_modules/.pnpm/pino-pretty@13.1.3/node_modules/pino-pretty/lib/colors.js
+var require_colors = /* @__PURE__ */ __commonJSMin(((exports, module) => {
+	const nocolor = (input) => input;
+	const plain = {
+		default: nocolor,
+		60: nocolor,
+		50: nocolor,
+		40: nocolor,
+		30: nocolor,
+		20: nocolor,
+		10: nocolor,
+		message: nocolor,
+		greyMessage: nocolor,
+		property: nocolor
+	};
+	const { createColors } = require_colorette();
+	const getLevelLabelData = require_get_level_label_data();
+	const availableColors = createColors({ useColor: true });
+	const { white, bgRed, red, yellow, green, blue, gray, cyan, magenta } = availableColors;
+	const colored = {
+		default: white,
+		60: bgRed,
+		50: red,
+		40: yellow,
+		30: green,
+		20: blue,
+		10: gray,
+		message: cyan,
+		greyMessage: gray,
+		property: magenta
+	};
+	function resolveCustomColoredColorizer(customColors) {
+		return customColors.reduce(function(agg, [level, color]) {
+			agg[level] = typeof availableColors[color] === "function" ? availableColors[color] : white;
+			return agg;
+		}, {
+			default: white,
+			message: cyan,
+			greyMessage: gray,
+			property: magenta
+		});
+	}
+	function colorizeLevel(useOnlyCustomProps) {
+		return function(level, colorizer, { customLevels, customLevelNames } = {}) {
+			const [levelStr, levelNum] = getLevelLabelData(useOnlyCustomProps, customLevels, customLevelNames)(level);
+			return Object.prototype.hasOwnProperty.call(colorizer, levelNum) ? colorizer[levelNum](levelStr) : colorizer.default(levelStr);
+		};
+	}
+	function plainColorizer(useOnlyCustomProps) {
+		const newPlainColorizer = colorizeLevel(useOnlyCustomProps);
+		const customColoredColorizer = function(level, opts) {
+			return newPlainColorizer(level, plain, opts);
+		};
+		customColoredColorizer.message = plain.message;
+		customColoredColorizer.greyMessage = plain.greyMessage;
+		customColoredColorizer.property = plain.property;
+		customColoredColorizer.colors = createColors({ useColor: false });
+		return customColoredColorizer;
+	}
+	function coloredColorizer(useOnlyCustomProps) {
+		const newColoredColorizer = colorizeLevel(useOnlyCustomProps);
+		const customColoredColorizer = function(level, opts) {
+			return newColoredColorizer(level, colored, opts);
+		};
+		customColoredColorizer.message = colored.message;
+		customColoredColorizer.property = colored.property;
+		customColoredColorizer.greyMessage = colored.greyMessage;
+		customColoredColorizer.colors = availableColors;
+		return customColoredColorizer;
+	}
+	function customColoredColorizerFactory(customColors, useOnlyCustomProps) {
+		const onlyCustomColored = resolveCustomColoredColorizer(customColors);
+		const customColored = useOnlyCustomProps ? onlyCustomColored : Object.assign({}, colored, onlyCustomColored);
+		const colorizeLevelCustom = colorizeLevel(useOnlyCustomProps);
+		const customColoredColorizer = function(level, opts) {
+			return colorizeLevelCustom(level, customColored, opts);
+		};
+		customColoredColorizer.colors = availableColors;
+		customColoredColorizer.message = customColoredColorizer.message || customColored.message;
+		customColoredColorizer.property = customColoredColorizer.property || customColored.property;
+		customColoredColorizer.greyMessage = customColoredColorizer.greyMessage || customColored.greyMessage;
+		return customColoredColorizer;
+	}
+	/**
+	* Applies colorization, if possible, to a string representing the passed in
+	* `level`. For example, the default colorizer will return a "green" colored
+	* string for the "info" level.
+	*
+	* @typedef {function} ColorizerFunc
+	* @param {string|number} level In either case, the input will map to a color
+	* for the specified level or to the color for `USERLVL` if the level is not
+	* recognized.
+	* @property {function} message Accepts one string parameter that will be
+	* colorized to a predefined color.
+	* @property {Colorette.Colorette} colors Available color functions based on `useColor` (or `colorize`) context
+	*/
+	/**
+	* Factory function get a function to colorized levels. The returned function
+	* also includes a `.message(str)` method to colorize strings.
+	*
+	* @param {boolean} [useColors=false] When `true` a function that applies standard
+	* terminal colors is returned.
+	* @param {array[]} [customColors] Tuple where first item of each array is the
+	* level index and the second item is the color
+	* @param {boolean} [useOnlyCustomProps] When `true`, only use the provided
+	* custom colors provided and not fallback to default
+	*
+	* @returns {ColorizerFunc} `function (level) {}` has a `.message(str)` method to
+	* apply colorization to a string. The core function accepts either an integer
+	* `level` or a `string` level. The integer level will map to a known level
+	* string or to `USERLVL` if not known.  The string `level` will map to the same
+	* colors as the integer `level` and will also default to `USERLVL` if the given
+	* string is not a recognized level name.
+	*/
+	module.exports = function getColorizer(useColors = false, customColors, useOnlyCustomProps) {
+		if (useColors && customColors !== void 0) return customColoredColorizerFactory(customColors, useOnlyCustomProps);
+		else if (useColors) return coloredColorizer(useOnlyCustomProps);
+		return plainColorizer(useOnlyCustomProps);
+	};
+}));
+//#endregion
+//#region ../../node_modules/.pnpm/pino-pretty@13.1.3/node_modules/pino-pretty/lib/utils/noop.js
+var require_noop = /* @__PURE__ */ __commonJSMin(((exports, module) => {
+	module.exports = function noop() {};
+}));
+//#endregion
+//#region ../../node_modules/.pnpm/pino-pretty@13.1.3/node_modules/pino-pretty/lib/utils/build-safe-sonic-boom.js
+var require_build_safe_sonic_boom = /* @__PURE__ */ __commonJSMin(((exports, module) => {
+	module.exports = buildSafeSonicBoom;
+	const { isMainThread } = __require("node:worker_threads");
+	const SonicBoom = require_sonic_boom();
+	const noop = require_noop();
+	/**
+	* Creates a safe SonicBoom instance
+	*
+	* @param {object} opts Options for SonicBoom
+	*
+	* @returns {object} A new SonicBoom stream
+	*/
+	function buildSafeSonicBoom(opts) {
+		const stream = new SonicBoom(opts);
+		stream.on("error", filterBrokenPipe);
+		if (!opts.sync && isMainThread) setupOnExit(stream);
+		return stream;
+		function filterBrokenPipe(err) {
+			if (err.code === "EPIPE") {
+				stream.write = noop;
+				stream.end = noop;
+				stream.flushSync = noop;
+				stream.destroy = noop;
+				return;
+			}
+			stream.removeListener("error", filterBrokenPipe);
+		}
+	}
+	function setupOnExit(stream) {
+		/* istanbul ignore next */
+		if (global.WeakRef && global.WeakMap && global.FinalizationRegistry) {
+			const onExit = require_on_exit_leak_free();
+			onExit.register(stream, autoEnd);
+			stream.on("close", function() {
+				onExit.unregister(stream);
+			});
+		}
+	}
+	/* istanbul ignore next */
+	function autoEnd(stream, eventName) {
+		if (stream.destroyed) return;
+		if (eventName === "beforeExit") {
+			stream.flush();
+			stream.on("drain", function() {
+				stream.end();
+			});
+		} else stream.flushSync();
+	}
+}));
+//#endregion
+//#region ../../node_modules/.pnpm/pino-pretty@13.1.3/node_modules/pino-pretty/lib/utils/is-valid-date.js
+var require_is_valid_date = /* @__PURE__ */ __commonJSMin(((exports, module) => {
+	module.exports = isValidDate;
+	/**
+	* Checks if the argument is a JS Date and not 'Invalid Date'.
+	*
+	* @param {Date} date The date to check.
+	*
+	* @returns {boolean} true if the argument is a JS Date and not 'Invalid Date'.
+	*/
+	function isValidDate(date) {
+		return date instanceof Date && !Number.isNaN(date.getTime());
+	}
+}));
+//#endregion
+//#region ../../node_modules/.pnpm/pino-pretty@13.1.3/node_modules/pino-pretty/lib/utils/create-date.js
+var require_create_date = /* @__PURE__ */ __commonJSMin(((exports, module) => {
+	module.exports = createDate;
+	const isValidDate = require_is_valid_date();
+	/**
+	* Constructs a JS Date from a number or string. Accepts any single number
+	* or single string argument that is valid for the Date() constructor,
+	* or an epoch as a string.
+	*
+	* @param {string|number} epoch The representation of the Date.
+	*
+	* @returns {Date} The constructed Date.
+	*/
+	function createDate(epoch) {
+		let date = new Date(epoch);
+		if (isValidDate(date)) return date;
+		date = /* @__PURE__ */ new Date(+epoch);
+		return date;
+	}
+}));
+//#endregion
+//#region ../../node_modules/.pnpm/pino-pretty@13.1.3/node_modules/pino-pretty/lib/utils/split-property-key.js
+var require_split_property_key = /* @__PURE__ */ __commonJSMin(((exports, module) => {
+	module.exports = splitPropertyKey;
+	/**
+	* Splits the property key delimited by a dot character but not when it is preceded
+	* by a backslash.
+	*
+	* @param {string} key A string identifying the property.
+	*
+	* @returns {string[]} Returns a list of string containing each delimited property.
+	* e.g. `'prop2\.domain\.corp.prop2'` should return [ 'prop2.domain.com', 'prop2' ]
+	*/
+	function splitPropertyKey(key) {
+		const result = [];
+		let backslash = false;
+		let segment = "";
+		for (let i = 0; i < key.length; i++) {
+			const c = key.charAt(i);
+			if (c === "\\") {
+				backslash = true;
+				continue;
+			}
+			if (backslash) {
+				backslash = false;
+				segment += c;
+				continue;
+			}
+			if (c === ".") {
+				result.push(segment);
+				segment = "";
+				continue;
+			}
+			segment += c;
+		}
+		if (segment.length) result.push(segment);
+		return result;
+	}
+}));
+//#endregion
+//#region ../../node_modules/.pnpm/pino-pretty@13.1.3/node_modules/pino-pretty/lib/utils/get-property-value.js
+var require_get_property_value = /* @__PURE__ */ __commonJSMin(((exports, module) => {
+	module.exports = getPropertyValue;
+	const splitPropertyKey = require_split_property_key();
+	/**
+	* Gets a specified property from an object if it exists.
+	*
+	* @param {object} obj The object to be searched.
+	* @param {string|string[]} property A string, or an array of strings, identifying
+	* the property to be retrieved from the object.
+	* Accepts nested properties delimited by a `.`.
+	* Delimiter can be escaped to preserve property names that contain the delimiter.
+	* e.g. `'prop1.prop2'` or `'prop2\.domain\.corp.prop2'`.
+	*
+	* @returns {*}
+	*/
+	function getPropertyValue(obj, property) {
+		const props = Array.isArray(property) ? property : splitPropertyKey(property);
+		for (const prop of props) {
+			if (!Object.prototype.hasOwnProperty.call(obj, prop)) return;
+			obj = obj[prop];
+		}
+		return obj;
+	}
+}));
+//#endregion
+//#region ../../node_modules/.pnpm/pino-pretty@13.1.3/node_modules/pino-pretty/lib/utils/delete-log-property.js
+var require_delete_log_property = /* @__PURE__ */ __commonJSMin(((exports, module) => {
+	module.exports = deleteLogProperty;
+	const getPropertyValue = require_get_property_value();
+	const splitPropertyKey = require_split_property_key();
+	/**
+	* Deletes a specified property from a log object if it exists.
+	* This function mutates the passed in `log` object.
+	*
+	* @param {object} log The log object to be modified.
+	* @param {string} property A string identifying the property to be deleted from
+	* the log object. Accepts nested properties delimited by a `.`
+	* Delimiter can be escaped to preserve property names that contain the delimiter.
+	* e.g. `'prop1.prop2'` or `'prop2\.domain\.corp.prop2'`
+	*/
+	function deleteLogProperty(log, property) {
+		const props = splitPropertyKey(property);
+		const propToDelete = props.pop();
+		log = getPropertyValue(log, props);
+		/* istanbul ignore else */
+		if (log !== null && typeof log === "object" && Object.prototype.hasOwnProperty.call(log, propToDelete)) delete log[propToDelete];
+	}
+}));
+//#endregion
+//#region ../../node_modules/.pnpm/fast-copy@4.0.3/node_modules/fast-copy/dist/cjs/index.cjs
+var require_cjs$1 = /* @__PURE__ */ __commonJSMin(((exports) => {
+	const toStringFunction = Function.prototype.toString;
+	const toStringObject = Object.prototype.toString;
+	/**
+	* Get an empty version of the object with the same prototype it has.
+	*/
+	function getCleanClone(prototype) {
+		if (!prototype) return Object.create(null);
+		const Constructor = prototype.constructor;
+		if (Constructor === Object) return prototype === Object.prototype ? {} : Object.create(prototype);
+		if (Constructor && ~toStringFunction.call(Constructor).indexOf("[native code]")) try {
+			return new Constructor();
+		} catch (_a) {}
+		return Object.create(prototype);
+	}
+	/**
+	* Get the tag of the value passed, so that the correct copier can be used.
+	*/
+	function getTag(value) {
+		const stringTag = value[Symbol.toStringTag];
+		if (stringTag) return stringTag;
+		const type = toStringObject.call(value);
+		return type.substring(8, type.length - 1);
+	}
+	const { hasOwnProperty, propertyIsEnumerable } = Object.prototype;
+	function copyOwnDescriptor(original, clone, property, state) {
+		const ownDescriptor = Object.getOwnPropertyDescriptor(original, property) || {
+			configurable: true,
+			enumerable: true,
+			value: original[property],
+			writable: true
+		};
+		const descriptor = ownDescriptor.get || ownDescriptor.set ? ownDescriptor : {
+			configurable: ownDescriptor.configurable,
+			enumerable: ownDescriptor.enumerable,
+			value: state.copier(ownDescriptor.value, state),
+			writable: ownDescriptor.writable
+		};
+		try {
+			Object.defineProperty(clone, property, descriptor);
+		} catch (_a) {
+			clone[property] = descriptor.get ? descriptor.get() : descriptor.value;
+		}
+	}
+	/**
+	* Striclty copy all properties contained on the object.
+	*/
+	function copyOwnPropertiesStrict(value, clone, state) {
+		const names = Object.getOwnPropertyNames(value);
+		for (let index = 0; index < names.length; ++index) copyOwnDescriptor(value, clone, names[index], state);
+		const symbols = Object.getOwnPropertySymbols(value);
+		for (let index = 0; index < symbols.length; ++index) copyOwnDescriptor(value, clone, symbols[index], state);
+		return clone;
+	}
+	/**
+	* Deeply copy the indexed values in the array.
+	*/
+	function copyArrayLoose(array, state) {
+		const clone = new state.Constructor();
+		state.cache.set(array, clone);
+		for (let index = 0; index < array.length; ++index) clone[index] = state.copier(array[index], state);
+		return clone;
+	}
+	/**
+	* Deeply copy the indexed values in the array, as well as any custom properties.
+	*/
+	function copyArrayStrict(array, state) {
+		const clone = new state.Constructor();
+		state.cache.set(array, clone);
+		return copyOwnPropertiesStrict(array, clone, state);
+	}
+	/**
+	* Copy the contents of the ArrayBuffer.
+	*/
+	function copyArrayBuffer(arrayBuffer, _state) {
+		return arrayBuffer.slice(0);
+	}
+	/**
+	* Create a new Blob with the contents of the original.
+	*/
+	function copyBlob(blob, _state) {
+		return blob.slice(0, blob.size, blob.type);
+	}
+	/**
+	* Create a new DataView with the contents of the original.
+	*/
+	function copyDataView(dataView, state) {
+		return new state.Constructor(copyArrayBuffer(dataView.buffer));
+	}
+	/**
+	* Create a new Date based on the time of the original.
+	*/
+	function copyDate(date, state) {
+		return new state.Constructor(date.getTime());
+	}
+	/**
+	* Deeply copy the keys and values of the original.
+	*/
+	function copyMapLoose(map, state) {
+		const clone = new state.Constructor();
+		state.cache.set(map, clone);
+		map.forEach((value, key) => {
+			clone.set(key, state.copier(value, state));
+		});
+		return clone;
+	}
+	/**
+	* Deeply copy the keys and values of the original, as well as any custom properties.
+	*/
+	function copyMapStrict(map, state) {
+		return copyOwnPropertiesStrict(map, copyMapLoose(map, state), state);
+	}
+	/**
+	* Deeply copy the properties (keys and symbols) and values of the original.
+	*/
+	function copyObjectLoose(object, state) {
+		const clone = getCleanClone(state.prototype);
+		state.cache.set(object, clone);
+		for (const key in object) if (hasOwnProperty.call(object, key)) clone[key] = state.copier(object[key], state);
+		const symbols = Object.getOwnPropertySymbols(object);
+		for (let index = 0; index < symbols.length; ++index) {
+			const symbol = symbols[index];
+			if (propertyIsEnumerable.call(object, symbol)) clone[symbol] = state.copier(object[symbol], state);
+		}
+		return clone;
+	}
+	/**
+	* Deeply copy the properties (keys and symbols) and values of the original, as well
+	* as any hidden or non-enumerable properties.
+	*/
+	function copyObjectStrict(object, state) {
+		const clone = getCleanClone(state.prototype);
+		state.cache.set(object, clone);
+		return copyOwnPropertiesStrict(object, clone, state);
+	}
+	/**
+	* Create a new primitive wrapper from the value of the original.
+	*/
+	function copyPrimitiveWrapper(primitiveObject, state) {
+		return new state.Constructor(primitiveObject.valueOf());
+	}
+	/**
+	* Create a new RegExp based on the value and flags of the original.
+	*/
+	function copyRegExp(regExp, state) {
+		const clone = new state.Constructor(regExp.source, regExp.flags);
+		clone.lastIndex = regExp.lastIndex;
+		return clone;
+	}
+	/**
+	* Return the original value (an identity function).
+	*
+	* @note
+	* THis is used for objects that cannot be copied, such as WeakMap.
+	*/
+	function copySelf(value, _state) {
+		return value;
+	}
+	/**
+	* Deeply copy the values of the original.
+	*/
+	function copySetLoose(set, state) {
+		const clone = new state.Constructor();
+		state.cache.set(set, clone);
+		set.forEach((value) => {
+			clone.add(state.copier(value, state));
+		});
+		return clone;
+	}
+	/**
+	* Deeply copy the values of the original, as well as any custom properties.
+	*/
+	function copySetStrict(set, state) {
+		return copyOwnPropertiesStrict(set, copySetLoose(set, state), state);
+	}
+	function createDefaultCache() {
+		return /* @__PURE__ */ new WeakMap();
+	}
+	function getOptions({ createCache: createCacheOverride, methods: methodsOverride, strict }) {
+		const defaultMethods = {
+			array: strict ? copyArrayStrict : copyArrayLoose,
+			arrayBuffer: copyArrayBuffer,
+			asyncGenerator: copySelf,
+			blob: copyBlob,
+			dataView: copyDataView,
+			date: copyDate,
+			error: copySelf,
+			generator: copySelf,
+			map: strict ? copyMapStrict : copyMapLoose,
+			object: strict ? copyObjectStrict : copyObjectLoose,
+			regExp: copyRegExp,
+			set: strict ? copySetStrict : copySetLoose
+		};
+		const methods = methodsOverride ? Object.assign(defaultMethods, methodsOverride) : defaultMethods;
+		const copiers = getTagSpecificCopiers(methods);
+		const createCache = createCacheOverride || createDefaultCache;
+		if (!copiers.Object || !copiers.Array) throw new Error("An object and array copier must be provided.");
+		return {
+			createCache,
+			copiers,
+			methods,
+			strict: Boolean(strict)
+		};
+	}
+	/**
+	* Get the copiers used for each specific object tag.
+	*/
+	function getTagSpecificCopiers(methods) {
+		return {
+			Arguments: methods.object,
+			Array: methods.array,
+			ArrayBuffer: methods.arrayBuffer,
+			AsyncGenerator: methods.asyncGenerator,
+			BigInt64Array: methods.arrayBuffer,
+			BigUint64Array: methods.arrayBuffer,
+			Blob: methods.blob,
+			Boolean: copyPrimitiveWrapper,
+			DataView: methods.dataView,
+			Date: methods.date,
+			Error: methods.error,
+			Float32Array: methods.arrayBuffer,
+			Float64Array: methods.arrayBuffer,
+			Generator: methods.generator,
+			Int8Array: methods.arrayBuffer,
+			Int16Array: methods.arrayBuffer,
+			Int32Array: methods.arrayBuffer,
+			Map: methods.map,
+			Number: copyPrimitiveWrapper,
+			Object: methods.object,
+			Promise: copySelf,
+			RegExp: methods.regExp,
+			Set: methods.set,
+			String: copyPrimitiveWrapper,
+			WeakMap: copySelf,
+			WeakSet: copySelf,
+			Uint8Array: methods.arrayBuffer,
+			Uint8ClampedArray: methods.arrayBuffer,
+			Uint16Array: methods.arrayBuffer,
+			Uint32Array: methods.arrayBuffer
+		};
+	}
+	/**
+	* Create a custom copier based on custom options for any of the following:
+	*   - `createCache` method to create a cache for copied objects
+	*   - custom copier `methods` for specific object types
+	*   - `strict` mode to copy all properties with their descriptors
+	*/
+	function createCopier(options = {}) {
+		const { createCache, copiers } = getOptions(options);
+		const { Array: copyArray, Object: copyObject } = copiers;
+		function copier(value, state) {
+			state.prototype = state.Constructor = void 0;
+			if (!value || typeof value !== "object") return value;
+			if (state.cache.has(value)) return state.cache.get(value);
+			state.prototype = Object.getPrototypeOf(value);
+			state.Constructor = state.prototype && state.prototype.constructor;
+			if (!state.Constructor || state.Constructor === Object) return copyObject(value, state);
+			if (Array.isArray(value)) return copyArray(value, state);
+			const tagSpecificCopier = copiers[getTag(value)];
+			if (tagSpecificCopier) return tagSpecificCopier(value, state);
+			return typeof value.then === "function" ? value : copyObject(value, state);
+		}
+		return function copy(value) {
+			return copier(value, {
+				Constructor: void 0,
+				cache: createCache(),
+				copier,
+				prototype: void 0
+			});
+		};
+	}
+	/**
+	* Copy an value deeply as much as possible, where strict recreation of object properties
+	* are maintained. All properties (including non-enumerable ones) are copied with their
+	* original property descriptors on both objects and arrays.
+	*/
+	const copyStrict = createCopier({ strict: true });
+	exports.copy = createCopier();
+	exports.copyStrict = copyStrict;
+	exports.createCopier = createCopier;
+}));
+//#endregion
+//#region ../../node_modules/.pnpm/pino-pretty@13.1.3/node_modules/pino-pretty/lib/utils/filter-log.js
+var require_filter_log = /* @__PURE__ */ __commonJSMin(((exports, module) => {
+	module.exports = filterLog;
+	const { createCopier } = require_cjs$1();
+	const fastCopy = createCopier({});
+	const deleteLogProperty = require_delete_log_property();
+	/**
+	* @typedef {object} FilterLogParams
+	* @property {object} log The log object to be modified.
+	* @property {PrettyContext} context The context object built from parsing
+	* the options.
+	*/
+	/**
+	* Filter a log object by removing or including keys accordingly.
+	* When `includeKeys` is passed, `ignoredKeys` will be ignored.
+	* One of ignoreKeys or includeKeys must be pass in.
+	*
+	* @param {FilterLogParams} input
+	*
+	* @returns {object} A new `log` object instance that
+	*  either only includes the keys in ignoreKeys
+	*  or does not include those in ignoredKeys.
+	*/
+	function filterLog({ log, context }) {
+		const { ignoreKeys, includeKeys } = context;
+		const logCopy = fastCopy(log);
+		if (includeKeys) {
+			const logIncluded = {};
+			includeKeys.forEach((key) => {
+				logIncluded[key] = logCopy[key];
+			});
+			return logIncluded;
+		}
+		ignoreKeys.forEach((ignoreKey) => {
+			deleteLogProperty(logCopy, ignoreKey);
+		});
+		return logCopy;
+	}
+}));
+//#endregion
+//#region ../../node_modules/.pnpm/dateformat@4.6.3/node_modules/dateformat/lib/dateformat.js
+var require_dateformat = /* @__PURE__ */ __commonJSMin(((exports, module) => {
+	function _typeof(obj) {
+		"@babel/helpers - typeof";
+		if (typeof Symbol === "function" && typeof Symbol.iterator === "symbol") _typeof = function _typeof(obj) {
+			return typeof obj;
+		};
+		else _typeof = function _typeof(obj) {
+			return obj && typeof Symbol === "function" && obj.constructor === Symbol && obj !== Symbol.prototype ? "symbol" : typeof obj;
+		};
+		return _typeof(obj);
+	}
+	(function(global) {
+		var _arguments = arguments;
+		var dateFormat = function() {
+			var token = /d{1,4}|D{3,4}|m{1,4}|yy(?:yy)?|([HhMsTt])\1?|W{1,2}|[LlopSZN]|"[^"]*"|'[^']*'/g;
+			var timezone = /\b(?:[PMCEA][SDP]T|(?:Pacific|Mountain|Central|Eastern|Atlantic) (?:Standard|Daylight|Prevailing) Time|(?:GMT|UTC)(?:[-+]\d{4})?)\b/g;
+			var timezoneClip = /[^-+\dA-Z]/g;
+			return function(date, mask, utc, gmt) {
+				if (_arguments.length === 1 && kindOf(date) === "string" && !/\d/.test(date)) {
+					mask = date;
+					date = void 0;
+				}
+				date = date || date === 0 ? date : /* @__PURE__ */ new Date();
+				if (!(date instanceof Date)) date = new Date(date);
+				if (isNaN(date)) throw TypeError("Invalid date");
+				mask = String(dateFormat.masks[mask] || mask || dateFormat.masks["default"]);
+				var maskSlice = mask.slice(0, 4);
+				if (maskSlice === "UTC:" || maskSlice === "GMT:") {
+					mask = mask.slice(4);
+					utc = true;
+					if (maskSlice === "GMT:") gmt = true;
+				}
+				var _ = function _() {
+					return utc ? "getUTC" : "get";
+				};
+				var _d = function d() {
+					return date[_() + "Date"]();
+				};
+				var D = function D() {
+					return date[_() + "Day"]();
+				};
+				var _m = function m() {
+					return date[_() + "Month"]();
+				};
+				var y = function y() {
+					return date[_() + "FullYear"]();
+				};
+				var _H = function H() {
+					return date[_() + "Hours"]();
+				};
+				var _M = function M() {
+					return date[_() + "Minutes"]();
+				};
+				var _s = function s() {
+					return date[_() + "Seconds"]();
+				};
+				var _L = function L() {
+					return date[_() + "Milliseconds"]();
+				};
+				var _o = function o() {
+					return utc ? 0 : date.getTimezoneOffset();
+				};
+				var _W = function W() {
+					return getWeek(date);
+				};
+				var _N = function N() {
+					return getDayOfWeek(date);
+				};
+				var flags = {
+					d: function d() {
+						return _d();
+					},
+					dd: function dd() {
+						return pad(_d());
+					},
+					ddd: function ddd() {
+						return dateFormat.i18n.dayNames[D()];
+					},
+					DDD: function DDD() {
+						return getDayName({
+							y: y(),
+							m: _m(),
+							d: _d(),
+							_: _(),
+							dayName: dateFormat.i18n.dayNames[D()],
+							short: true
+						});
+					},
+					dddd: function dddd() {
+						return dateFormat.i18n.dayNames[D() + 7];
+					},
+					DDDD: function DDDD() {
+						return getDayName({
+							y: y(),
+							m: _m(),
+							d: _d(),
+							_: _(),
+							dayName: dateFormat.i18n.dayNames[D() + 7]
+						});
+					},
+					m: function m() {
+						return _m() + 1;
+					},
+					mm: function mm() {
+						return pad(_m() + 1);
+					},
+					mmm: function mmm() {
+						return dateFormat.i18n.monthNames[_m()];
+					},
+					mmmm: function mmmm() {
+						return dateFormat.i18n.monthNames[_m() + 12];
+					},
+					yy: function yy() {
+						return String(y()).slice(2);
+					},
+					yyyy: function yyyy() {
+						return pad(y(), 4);
+					},
+					h: function h() {
+						return _H() % 12 || 12;
+					},
+					hh: function hh() {
+						return pad(_H() % 12 || 12);
+					},
+					H: function H() {
+						return _H();
+					},
+					HH: function HH() {
+						return pad(_H());
+					},
+					M: function M() {
+						return _M();
+					},
+					MM: function MM() {
+						return pad(_M());
+					},
+					s: function s() {
+						return _s();
+					},
+					ss: function ss() {
+						return pad(_s());
+					},
+					l: function l() {
+						return pad(_L(), 3);
+					},
+					L: function L() {
+						return pad(Math.floor(_L() / 10));
+					},
+					t: function t() {
+						return _H() < 12 ? dateFormat.i18n.timeNames[0] : dateFormat.i18n.timeNames[1];
+					},
+					tt: function tt() {
+						return _H() < 12 ? dateFormat.i18n.timeNames[2] : dateFormat.i18n.timeNames[3];
+					},
+					T: function T() {
+						return _H() < 12 ? dateFormat.i18n.timeNames[4] : dateFormat.i18n.timeNames[5];
+					},
+					TT: function TT() {
+						return _H() < 12 ? dateFormat.i18n.timeNames[6] : dateFormat.i18n.timeNames[7];
+					},
+					Z: function Z() {
+						return gmt ? "GMT" : utc ? "UTC" : (String(date).match(timezone) || [""]).pop().replace(timezoneClip, "").replace(/GMT\+0000/g, "UTC");
+					},
+					o: function o() {
+						return (_o() > 0 ? "-" : "+") + pad(Math.floor(Math.abs(_o()) / 60) * 100 + Math.abs(_o()) % 60, 4);
+					},
+					p: function p() {
+						return (_o() > 0 ? "-" : "+") + pad(Math.floor(Math.abs(_o()) / 60), 2) + ":" + pad(Math.floor(Math.abs(_o()) % 60), 2);
+					},
+					S: function S() {
+						return [
+							"th",
+							"st",
+							"nd",
+							"rd"
+						][_d() % 10 > 3 ? 0 : (_d() % 100 - _d() % 10 != 10) * _d() % 10];
+					},
+					W: function W() {
+						return _W();
+					},
+					WW: function WW() {
+						return pad(_W());
+					},
+					N: function N() {
+						return _N();
+					}
+				};
+				return mask.replace(token, function(match) {
+					if (match in flags) return flags[match]();
+					return match.slice(1, match.length - 1);
+				});
+			};
+		}();
+		dateFormat.masks = {
+			default: "ddd mmm dd yyyy HH:MM:ss",
+			shortDate: "m/d/yy",
+			paddedShortDate: "mm/dd/yyyy",
+			mediumDate: "mmm d, yyyy",
+			longDate: "mmmm d, yyyy",
+			fullDate: "dddd, mmmm d, yyyy",
+			shortTime: "h:MM TT",
+			mediumTime: "h:MM:ss TT",
+			longTime: "h:MM:ss TT Z",
+			isoDate: "yyyy-mm-dd",
+			isoTime: "HH:MM:ss",
+			isoDateTime: "yyyy-mm-dd'T'HH:MM:sso",
+			isoUtcDateTime: "UTC:yyyy-mm-dd'T'HH:MM:ss'Z'",
+			expiresHeaderFormat: "ddd, dd mmm yyyy HH:MM:ss Z"
+		};
+		dateFormat.i18n = {
+			dayNames: [
+				"Sun",
+				"Mon",
+				"Tue",
+				"Wed",
+				"Thu",
+				"Fri",
+				"Sat",
+				"Sunday",
+				"Monday",
+				"Tuesday",
+				"Wednesday",
+				"Thursday",
+				"Friday",
+				"Saturday"
+			],
+			monthNames: [
+				"Jan",
+				"Feb",
+				"Mar",
+				"Apr",
+				"May",
+				"Jun",
+				"Jul",
+				"Aug",
+				"Sep",
+				"Oct",
+				"Nov",
+				"Dec",
+				"January",
+				"February",
+				"March",
+				"April",
+				"May",
+				"June",
+				"July",
+				"August",
+				"September",
+				"October",
+				"November",
+				"December"
+			],
+			timeNames: [
+				"a",
+				"p",
+				"am",
+				"pm",
+				"A",
+				"P",
+				"AM",
+				"PM"
+			]
+		};
+		var pad = function pad(val, len) {
+			val = String(val);
+			len = len || 2;
+			while (val.length < len) val = "0" + val;
+			return val;
+		};
+		var getDayName = function getDayName(_ref) {
+			var y = _ref.y, m = _ref.m, d = _ref.d, _ = _ref._, dayName = _ref.dayName, _ref$short = _ref["short"], _short = _ref$short === void 0 ? false : _ref$short;
+			var today = /* @__PURE__ */ new Date();
+			var yesterday = /* @__PURE__ */ new Date();
+			yesterday.setDate(yesterday[_ + "Date"]() - 1);
+			var tomorrow = /* @__PURE__ */ new Date();
+			tomorrow.setDate(tomorrow[_ + "Date"]() + 1);
+			var today_d = function today_d() {
+				return today[_ + "Date"]();
+			};
+			var today_m = function today_m() {
+				return today[_ + "Month"]();
+			};
+			var today_y = function today_y() {
+				return today[_ + "FullYear"]();
+			};
+			var yesterday_d = function yesterday_d() {
+				return yesterday[_ + "Date"]();
+			};
+			var yesterday_m = function yesterday_m() {
+				return yesterday[_ + "Month"]();
+			};
+			var yesterday_y = function yesterday_y() {
+				return yesterday[_ + "FullYear"]();
+			};
+			var tomorrow_d = function tomorrow_d() {
+				return tomorrow[_ + "Date"]();
+			};
+			var tomorrow_m = function tomorrow_m() {
+				return tomorrow[_ + "Month"]();
+			};
+			var tomorrow_y = function tomorrow_y() {
+				return tomorrow[_ + "FullYear"]();
+			};
+			if (today_y() === y && today_m() === m && today_d() === d) return _short ? "Tdy" : "Today";
+			else if (yesterday_y() === y && yesterday_m() === m && yesterday_d() === d) return _short ? "Ysd" : "Yesterday";
+			else if (tomorrow_y() === y && tomorrow_m() === m && tomorrow_d() === d) return _short ? "Tmw" : "Tomorrow";
+			return dayName;
+		};
+		var getWeek = function getWeek(date) {
+			var targetThursday = new Date(date.getFullYear(), date.getMonth(), date.getDate());
+			targetThursday.setDate(targetThursday.getDate() - (targetThursday.getDay() + 6) % 7 + 3);
+			var firstThursday = new Date(targetThursday.getFullYear(), 0, 4);
+			firstThursday.setDate(firstThursday.getDate() - (firstThursday.getDay() + 6) % 7 + 3);
+			var ds = targetThursday.getTimezoneOffset() - firstThursday.getTimezoneOffset();
+			targetThursday.setHours(targetThursday.getHours() - ds);
+			var weekDiff = (targetThursday - firstThursday) / (864e5 * 7);
+			return 1 + Math.floor(weekDiff);
+		};
+		var getDayOfWeek = function getDayOfWeek(date) {
+			var dow = date.getDay();
+			if (dow === 0) dow = 7;
+			return dow;
+		};
+		var kindOf = function kindOf(val) {
+			if (val === null) return "null";
+			if (val === void 0) return "undefined";
+			if (_typeof(val) !== "object") return _typeof(val);
+			if (Array.isArray(val)) return "array";
+			return {}.toString.call(val).slice(8, -1).toLowerCase();
+		};
+		if (typeof define === "function" && define.amd) define(function() {
+			return dateFormat;
+		});
+		else if ((typeof exports === "undefined" ? "undefined" : _typeof(exports)) === "object") module.exports = dateFormat;
+		else global.dateFormat = dateFormat;
+	})(void 0);
+}));
+//#endregion
+//#region ../../node_modules/.pnpm/pino-pretty@13.1.3/node_modules/pino-pretty/lib/utils/format-time.js
+var require_format_time = /* @__PURE__ */ __commonJSMin(((exports, module) => {
+	module.exports = formatTime;
+	const { DATE_FORMAT, DATE_FORMAT_SIMPLE } = require_constants$5();
+	const dateformat = require_dateformat();
+	const createDate = require_create_date();
+	const isValidDate = require_is_valid_date();
+	/**
+	* Converts a given `epoch` to a desired display format.
+	*
+	* @param {number|string} epoch The time to convert. May be any value that is
+	* valid for `new Date()`.
+	* @param {boolean|string} [translateTime=false] When `false`, the given `epoch`
+	* will simply be returned. When `true`, the given `epoch` will be converted
+	* to a string at UTC using the `DATE_FORMAT_SIMPLE` constant. If `translateTime` is
+	* a string, the following rules are available:
+	*
+	* - `<format string>`: The string is a literal format string. This format
+	* string will be used to interpret the `epoch` and return a display string
+	* at UTC.
+	* - `SYS:STANDARD`: The returned display string will follow the `DATE_FORMAT`
+	* constant at the system's local timezone.
+	* - `SYS:<format string>`: The returned display string will follow the given
+	* `<format string>` at the system's local timezone.
+	* - `UTC:<format string>`: The returned display string will follow the given
+	* `<format string>` at UTC.
+	*
+	* @returns {number|string} The formatted time.
+	*/
+	function formatTime(epoch, translateTime = false) {
+		if (translateTime === false) return epoch;
+		const instant = createDate(epoch);
+		if (!isValidDate(instant)) return epoch;
+		if (translateTime === true) return dateformat(instant, DATE_FORMAT_SIMPLE);
+		const upperFormat = translateTime.toUpperCase();
+		if (upperFormat === "SYS:STANDARD") return dateformat(instant, DATE_FORMAT);
+		const prefix = upperFormat.substr(0, 4);
+		if (prefix === "SYS:" || prefix === "UTC:") {
+			if (prefix === "UTC:") return dateformat(instant, translateTime);
+			return dateformat(instant, translateTime.slice(4));
+		}
+		return dateformat(instant, `UTC:${translateTime}`);
+	}
+}));
+//#endregion
+//#region ../../node_modules/.pnpm/pino-pretty@13.1.3/node_modules/pino-pretty/lib/utils/handle-custom-levels-names-opts.js
+var require_handle_custom_levels_names_opts = /* @__PURE__ */ __commonJSMin(((exports, module) => {
+	module.exports = handleCustomLevelsNamesOpts;
+	/**
+	* Parse a CSV string or options object that maps level
+	* labels to level values.
+	*
+	* @param {string|object} cLevels An object mapping level
+	* names to level values, e.g. `{ info: 30, debug: 65 }`, or a
+	* CSV string in the format `level_name:level_value`, e.g.
+	* `info:30,debug:65`.
+	*
+	* @returns {object} An object mapping levels names to level values
+	* e.g. `{ info: 30, debug: 65 }`.
+	*/
+	function handleCustomLevelsNamesOpts(cLevels) {
+		if (!cLevels) return {};
+		if (typeof cLevels === "string") return cLevels.split(",").reduce((agg, value, idx) => {
+			const [levelName, levelNum = idx] = value.split(":");
+			agg[levelName.toLowerCase()] = levelNum;
+			return agg;
+		}, {});
+		else if (Object.prototype.toString.call(cLevels) === "[object Object]") return Object.keys(cLevels).reduce((agg, levelName) => {
+			agg[levelName.toLowerCase()] = cLevels[levelName];
+			return agg;
+		}, {});
+		else return {};
+	}
+}));
+//#endregion
+//#region ../../node_modules/.pnpm/pino-pretty@13.1.3/node_modules/pino-pretty/lib/utils/handle-custom-levels-opts.js
+var require_handle_custom_levels_opts = /* @__PURE__ */ __commonJSMin(((exports, module) => {
+	module.exports = handleCustomLevelsOpts;
+	/**
+	* Parse a CSV string or options object that specifies
+	* configuration for custom levels.
+	*
+	* @param {string|object} cLevels An object mapping level
+	* names to values, e.g. `{ info: 30, debug: 65 }`, or a
+	* CSV string in the format `level_name:level_value`, e.g.
+	* `info:30,debug:65`.
+	*
+	* @returns {object} An object mapping levels to labels that
+	* appear in logs, e.g. `{ '30': 'INFO', '65': 'DEBUG' }`.
+	*/
+	function handleCustomLevelsOpts(cLevels) {
+		if (!cLevels) return {};
+		if (typeof cLevels === "string") return cLevels.split(",").reduce((agg, value, idx) => {
+			const [levelName, levelNum = idx] = value.split(":");
+			agg[levelNum] = levelName.toUpperCase();
+			return agg;
+		}, { default: "USERLVL" });
+		else if (Object.prototype.toString.call(cLevels) === "[object Object]") return Object.keys(cLevels).reduce((agg, levelName) => {
+			agg[cLevels[levelName]] = levelName.toUpperCase();
+			return agg;
+		}, { default: "USERLVL" });
+		else return {};
+	}
+}));
+//#endregion
+//#region ../../node_modules/.pnpm/pino-pretty@13.1.3/node_modules/pino-pretty/lib/utils/interpret-conditionals.js
+var require_interpret_conditionals = /* @__PURE__ */ __commonJSMin(((exports, module) => {
+	module.exports = interpretConditionals;
+	const getPropertyValue = require_get_property_value();
+	/**
+	* Translates all conditional blocks from within the messageFormat. Translates
+	* any matching {if key}{key}{end} statements and returns everything between
+	* if and else blocks if the key provided was found in log.
+	*
+	* @param {MessageFormatString|MessageFormatFunction} messageFormat A format
+	* string or function that defines how the logged message should be
+	* conditionally formatted.
+	* @param {object} log The log object to be modified.
+	*
+	* @returns {string} The parsed messageFormat.
+	*/
+	function interpretConditionals(messageFormat, log) {
+		messageFormat = messageFormat.replace(/{if (.*?)}(.*?){end}/g, replacer);
+		messageFormat = messageFormat.replace(/{if (.*?)}/g, "");
+		messageFormat = messageFormat.replace(/{end}/g, "");
+		return messageFormat.replace(/\s+/g, " ").trim();
+		function replacer(_, key, value) {
+			const propertyValue = getPropertyValue(log, key);
+			if (propertyValue && value.includes(key)) return value.replace(new RegExp("{" + key + "}", "g"), propertyValue);
+			else return "";
+		}
+	}
+}));
+//#endregion
+//#region ../../node_modules/.pnpm/pino-pretty@13.1.3/node_modules/pino-pretty/lib/utils/is-object.js
+var require_is_object = /* @__PURE__ */ __commonJSMin(((exports, module) => {
+	module.exports = isObject;
+	function isObject(input) {
+		return Object.prototype.toString.apply(input) === "[object Object]";
+	}
+}));
+//#endregion
+//#region ../../node_modules/.pnpm/pino-pretty@13.1.3/node_modules/pino-pretty/lib/utils/join-lines-with-indentation.js
+var require_join_lines_with_indentation = /* @__PURE__ */ __commonJSMin(((exports, module) => {
+	module.exports = joinLinesWithIndentation;
+	/**
+	* @typedef {object} JoinLinesWithIndentationParams
+	* @property {string} input The string to split and reformat.
+	* @property {string} [ident] The indentation string. Default: `    ` (4 spaces).
+	* @property {string} [eol] The end of line sequence to use when rejoining
+	* the lines. Default: `'\n'`.
+	*/
+	/**
+	* Given a string with line separators, either `\r\n` or `\n`, add indentation
+	* to all lines subsequent to the first line and rejoin the lines using an
+	* end of line sequence.
+	*
+	* @param {JoinLinesWithIndentationParams} input
+	*
+	* @returns {string} A string with lines subsequent to the first indented
+	* with the given indentation sequence.
+	*/
+	function joinLinesWithIndentation({ input, ident = "    ", eol = "\n" }) {
+		const lines = input.split(/\r?\n/);
+		for (let i = 1; i < lines.length; i += 1) lines[i] = ident + lines[i];
+		return lines.join(eol);
+	}
+}));
+//#endregion
+//#region ../../node_modules/.pnpm/pino-pretty@13.1.3/node_modules/pino-pretty/lib/utils/parse-factory-options.js
+var require_parse_factory_options = /* @__PURE__ */ __commonJSMin(((exports, module) => {
+	module.exports = parseFactoryOptions;
+	const { LEVEL_NAMES } = require_constants$5();
+	const colors = require_colors();
+	const handleCustomLevelsOpts = require_handle_custom_levels_opts();
+	const handleCustomLevelsNamesOpts = require_handle_custom_levels_names_opts();
+	const handleLevelLabelData = require_get_level_label_data();
+	/**
+	* A `PrettyContext` is an object to be used by the various functions that
+	* process log data. It is derived from the provided {@link PinoPrettyOptions}.
+	* It may be used as a `this` context.
+	*
+	* @typedef {object} PrettyContext
+	* @property {string} EOL The escape sequence chosen as the line terminator.
+	* @property {string} IDENT The string to use as the indentation sequence.
+	* @property {ColorizerFunc} colorizer A configured colorizer function.
+	* @property {Array[Array<number, string>]} customColors A set of custom color
+	* names associated with level numbers.
+	* @property {object} customLevelNames A hash of level numbers to level names,
+	* e.g. `{ 30: "info" }`.
+	* @property {object} customLevels A hash of level names to level numbers,
+	* e.g. `{ info: 30 }`.
+	* @property {CustomPrettifiers} customPrettifiers A hash of custom prettifier
+	* functions.
+	* @property {object} customProperties Comprised of `customLevels` and
+	* `customLevelNames` if such options are provided.
+	* @property {string[]} errorLikeObjectKeys The key names in the log data that
+	* should be considered as holding error objects.
+	* @property {string[]} errorProps A list of error object keys that should be
+	* included in the output.
+	* @property {function} getLevelLabelData Pass a numeric level to return [levelLabelString,levelNum]
+	* @property {boolean} hideObject Indicates the prettifier should omit objects
+	* in the output.
+	* @property {string[]} ignoreKeys Set of log data keys to omit.
+	* @property {string[]} includeKeys Opposite of `ignoreKeys`.
+	* @property {boolean} levelFirst Indicates the level should be printed first.
+	* @property {string} levelKey Name of the key in the log data that contains
+	* the message.
+	* @property {string} levelLabel Format token to represent the position of the
+	* level name in the output string.
+	* @property {MessageFormatString|MessageFormatFunction} messageFormat
+	* @property {string} messageKey Name of the key in the log data that contains
+	* the message.
+	* @property {string|number} minimumLevel The minimum log level to process
+	* and output.
+	* @property {ColorizerFunc} objectColorizer
+	* @property {boolean} singleLine Indicates objects should be printed on a
+	* single output line.
+	* @property {string} timestampKey The name of the key in the log data that
+	* contains the log timestamp.
+	* @property {boolean} translateTime Indicates if timestamps should be
+	* translated to a human-readable string.
+	* @property {boolean} useOnlyCustomProps
+	*/
+	/**
+	* @param {PinoPrettyOptions} options The user supplied object of options.
+	*
+	* @returns {PrettyContext}
+	*/
+	function parseFactoryOptions(options) {
+		const EOL = options.crlf ? "\r\n" : "\n";
+		const IDENT = "    ";
+		const { customPrettifiers, errorLikeObjectKeys, hideObject, levelFirst, levelKey, levelLabel, messageFormat, messageKey, minimumLevel, singleLine, timestampKey, translateTime } = options;
+		const errorProps = options.errorProps.split(",");
+		const useOnlyCustomProps = typeof options.useOnlyCustomProps === "boolean" ? options.useOnlyCustomProps : options.useOnlyCustomProps === "true";
+		const customLevels = handleCustomLevelsOpts(options.customLevels);
+		const customLevelNames = handleCustomLevelsNamesOpts(options.customLevels);
+		const getLevelLabelData = handleLevelLabelData(useOnlyCustomProps, customLevels, customLevelNames);
+		let customColors;
+		if (options.customColors) if (typeof options.customColors === "string") customColors = options.customColors.split(",").reduce((agg, value) => {
+			const [level, color] = value.split(":");
+			const levelNum = (useOnlyCustomProps ? options.customLevels : customLevelNames[level] !== void 0) ? customLevelNames[level] : LEVEL_NAMES[level];
+			const colorIdx = levelNum !== void 0 ? levelNum : level;
+			agg.push([colorIdx, color]);
+			return agg;
+		}, []);
+		else if (typeof options.customColors === "object") customColors = Object.keys(options.customColors).reduce((agg, value) => {
+			const [level, color] = [value, options.customColors[value]];
+			const levelNum = (useOnlyCustomProps ? options.customLevels : customLevelNames[level] !== void 0) ? customLevelNames[level] : LEVEL_NAMES[level];
+			const colorIdx = levelNum !== void 0 ? levelNum : level;
+			agg.push([colorIdx, color]);
+			return agg;
+		}, []);
+		else throw new Error("options.customColors must be of type string or object.");
+		const customProperties = {
+			customLevels,
+			customLevelNames
+		};
+		if (useOnlyCustomProps === true && !options.customLevels) {
+			customProperties.customLevels = void 0;
+			customProperties.customLevelNames = void 0;
+		}
+		const includeKeys = options.include !== void 0 ? new Set(options.include.split(",")) : void 0;
+		const ignoreKeys = !includeKeys && options.ignore ? new Set(options.ignore.split(",")) : void 0;
+		const colorizer = colors(options.colorize, customColors, useOnlyCustomProps);
+		const objectColorizer = options.colorizeObjects ? colorizer : colors(false, [], false);
+		return {
+			EOL,
+			IDENT,
+			colorizer,
+			customColors,
+			customLevelNames,
+			customLevels,
+			customPrettifiers,
+			customProperties,
+			errorLikeObjectKeys,
+			errorProps,
+			getLevelLabelData,
+			hideObject,
+			ignoreKeys,
+			includeKeys,
+			levelFirst,
+			levelKey,
+			levelLabel,
+			messageFormat,
+			messageKey,
+			minimumLevel,
+			objectColorizer,
+			singleLine,
+			timestampKey,
+			translateTime,
+			useOnlyCustomProps
+		};
+	}
+}));
+//#endregion
+//#region ../../node_modules/.pnpm/fast-safe-stringify@2.1.1/node_modules/fast-safe-stringify/index.js
+var require_fast_safe_stringify = /* @__PURE__ */ __commonJSMin(((exports, module) => {
+	module.exports = stringify;
+	stringify.default = stringify;
+	stringify.stable = deterministicStringify;
+	stringify.stableStringify = deterministicStringify;
+	var LIMIT_REPLACE_NODE = "[...]";
+	var CIRCULAR_REPLACE_NODE = "[Circular]";
+	var arr = [];
+	var replacerStack = [];
+	function defaultOptions() {
+		return {
+			depthLimit: Number.MAX_SAFE_INTEGER,
+			edgesLimit: Number.MAX_SAFE_INTEGER
+		};
+	}
+	function stringify(obj, replacer, spacer, options) {
+		if (typeof options === "undefined") options = defaultOptions();
+		decirc(obj, "", 0, [], void 0, 0, options);
+		var res;
+		try {
+			if (replacerStack.length === 0) res = JSON.stringify(obj, replacer, spacer);
+			else res = JSON.stringify(obj, replaceGetterValues(replacer), spacer);
+		} catch (_) {
+			return JSON.stringify("[unable to serialize, circular reference is too complex to analyze]");
+		} finally {
+			while (arr.length !== 0) {
+				var part = arr.pop();
+				if (part.length === 4) Object.defineProperty(part[0], part[1], part[3]);
+				else part[0][part[1]] = part[2];
+			}
+		}
+		return res;
+	}
+	function setReplace(replace, val, k, parent) {
+		var propertyDescriptor = Object.getOwnPropertyDescriptor(parent, k);
+		if (propertyDescriptor.get !== void 0) if (propertyDescriptor.configurable) {
+			Object.defineProperty(parent, k, { value: replace });
+			arr.push([
+				parent,
+				k,
+				val,
+				propertyDescriptor
+			]);
+		} else replacerStack.push([
+			val,
+			k,
+			replace
+		]);
+		else {
+			parent[k] = replace;
+			arr.push([
+				parent,
+				k,
+				val
+			]);
+		}
+	}
+	function decirc(val, k, edgeIndex, stack, parent, depth, options) {
+		depth += 1;
+		var i;
+		if (typeof val === "object" && val !== null) {
+			for (i = 0; i < stack.length; i++) if (stack[i] === val) {
+				setReplace(CIRCULAR_REPLACE_NODE, val, k, parent);
+				return;
+			}
+			if (typeof options.depthLimit !== "undefined" && depth > options.depthLimit) {
+				setReplace(LIMIT_REPLACE_NODE, val, k, parent);
+				return;
+			}
+			if (typeof options.edgesLimit !== "undefined" && edgeIndex + 1 > options.edgesLimit) {
+				setReplace(LIMIT_REPLACE_NODE, val, k, parent);
+				return;
+			}
+			stack.push(val);
+			if (Array.isArray(val)) for (i = 0; i < val.length; i++) decirc(val[i], i, i, stack, val, depth, options);
+			else {
+				var keys = Object.keys(val);
+				for (i = 0; i < keys.length; i++) {
+					var key = keys[i];
+					decirc(val[key], key, i, stack, val, depth, options);
+				}
+			}
+			stack.pop();
+		}
+	}
+	function compareFunction(a, b) {
+		if (a < b) return -1;
+		if (a > b) return 1;
+		return 0;
+	}
+	function deterministicStringify(obj, replacer, spacer, options) {
+		if (typeof options === "undefined") options = defaultOptions();
+		var tmp = deterministicDecirc(obj, "", 0, [], void 0, 0, options) || obj;
+		var res;
+		try {
+			if (replacerStack.length === 0) res = JSON.stringify(tmp, replacer, spacer);
+			else res = JSON.stringify(tmp, replaceGetterValues(replacer), spacer);
+		} catch (_) {
+			return JSON.stringify("[unable to serialize, circular reference is too complex to analyze]");
+		} finally {
+			while (arr.length !== 0) {
+				var part = arr.pop();
+				if (part.length === 4) Object.defineProperty(part[0], part[1], part[3]);
+				else part[0][part[1]] = part[2];
+			}
+		}
+		return res;
+	}
+	function deterministicDecirc(val, k, edgeIndex, stack, parent, depth, options) {
+		depth += 1;
+		var i;
+		if (typeof val === "object" && val !== null) {
+			for (i = 0; i < stack.length; i++) if (stack[i] === val) {
+				setReplace(CIRCULAR_REPLACE_NODE, val, k, parent);
+				return;
+			}
+			try {
+				if (typeof val.toJSON === "function") return;
+			} catch (_) {
+				return;
+			}
+			if (typeof options.depthLimit !== "undefined" && depth > options.depthLimit) {
+				setReplace(LIMIT_REPLACE_NODE, val, k, parent);
+				return;
+			}
+			if (typeof options.edgesLimit !== "undefined" && edgeIndex + 1 > options.edgesLimit) {
+				setReplace(LIMIT_REPLACE_NODE, val, k, parent);
+				return;
+			}
+			stack.push(val);
+			if (Array.isArray(val)) for (i = 0; i < val.length; i++) deterministicDecirc(val[i], i, i, stack, val, depth, options);
+			else {
+				var tmp = {};
+				var keys = Object.keys(val).sort(compareFunction);
+				for (i = 0; i < keys.length; i++) {
+					var key = keys[i];
+					deterministicDecirc(val[key], key, i, stack, val, depth, options);
+					tmp[key] = val[key];
+				}
+				if (typeof parent !== "undefined") {
+					arr.push([
+						parent,
+						k,
+						val
+					]);
+					parent[k] = tmp;
+				} else return tmp;
+			}
+			stack.pop();
+		}
+	}
+	function replaceGetterValues(replacer) {
+		replacer = typeof replacer !== "undefined" ? replacer : function(k, v) {
+			return v;
+		};
+		return function(key, val) {
+			if (replacerStack.length > 0) for (var i = 0; i < replacerStack.length; i++) {
+				var part = replacerStack[i];
+				if (part[1] === key && part[0] === val) {
+					val = part[2];
+					replacerStack.splice(i, 1);
+					break;
+				}
+			}
+			return replacer.call(this, key, val);
+		};
+	}
+}));
+//#endregion
+//#region ../../node_modules/.pnpm/pino-pretty@13.1.3/node_modules/pino-pretty/lib/utils/prettify-error.js
+var require_prettify_error = /* @__PURE__ */ __commonJSMin(((exports, module) => {
+	module.exports = prettifyError;
+	const joinLinesWithIndentation = require_join_lines_with_indentation();
+	/**
+	* @typedef {object} PrettifyErrorParams
+	* @property {string} keyName The key assigned to this error in the log object.
+	* @property {string} lines The STRINGIFIED error. If the error field has a
+	*  custom prettifier, that should be pre-applied as well.
+	* @property {string} ident The indentation sequence to use.
+	* @property {string} eol The EOL sequence to use.
+	*/
+	/**
+	* Prettifies an error string into a multi-line format.
+	*
+	* @param {PrettifyErrorParams} input
+	*
+	* @returns {string}
+	*/
+	function prettifyError({ keyName, lines, eol, ident }) {
+		let result = "";
+		const splitLines = `${ident}${keyName}: ${joinLinesWithIndentation({
+			input: lines,
+			ident,
+			eol
+		})}${eol}`.split(eol);
+		for (let j = 0; j < splitLines.length; j += 1) {
+			if (j !== 0) result += eol;
+			const line = splitLines[j];
+			if (/^\s*"stack"/.test(line)) {
+				const matches = /^(\s*"stack":)\s*(".*"),?$/.exec(line);
+				/* istanbul ignore else */
+				if (matches && matches.length === 3) {
+					const indentSize = /^\s*/.exec(line)[0].length + 4;
+					const indentation = " ".repeat(indentSize);
+					const stackMessage = matches[2];
+					result += matches[1] + eol + indentation + JSON.parse(stackMessage).replace(/\n/g, eol + indentation);
+				} else result += line;
+			} else result += line;
+		}
+		return result;
+	}
+}));
+//#endregion
+//#region ../../node_modules/.pnpm/pino-pretty@13.1.3/node_modules/pino-pretty/lib/utils/prettify-object.js
+var require_prettify_object = /* @__PURE__ */ __commonJSMin(((exports, module) => {
+	module.exports = prettifyObject;
+	const { LOGGER_KEYS } = require_constants$5();
+	const stringifySafe = require_fast_safe_stringify();
+	const joinLinesWithIndentation = require_join_lines_with_indentation();
+	const prettifyError = require_prettify_error();
+	/**
+	* @typedef {object} PrettifyObjectParams
+	* @property {object} log The object to prettify.
+	* @property {boolean} [excludeLoggerKeys] Indicates if known logger specific
+	* keys should be excluded from prettification. Default: `true`.
+	* @property {string[]} [skipKeys] A set of object keys to exclude from the
+	*  * prettified result. Default: `[]`.
+	* @property {PrettyContext} context The context object built from parsing
+	* the options.
+	*/
+	/**
+	* Prettifies a standard object. Special care is taken when processing the object
+	* to handle child objects that are attached to keys known to contain error
+	* objects.
+	*
+	* @param {PrettifyObjectParams} input
+	*
+	* @returns {string} The prettified string. This can be as little as `''` if
+	* there was nothing to prettify.
+	*/
+	function prettifyObject({ log, excludeLoggerKeys = true, skipKeys = [], context }) {
+		const { EOL: eol, IDENT: ident, customPrettifiers, errorLikeObjectKeys: errorLikeKeys, objectColorizer, singleLine, colorizer } = context;
+		const keysToIgnore = [].concat(skipKeys);
+		/* istanbul ignore else */
+		if (excludeLoggerKeys === true) Array.prototype.push.apply(keysToIgnore, LOGGER_KEYS);
+		let result = "";
+		const { plain, errors } = Object.entries(log).reduce(({ plain, errors }, [k, v]) => {
+			if (keysToIgnore.includes(k) === false) {
+				const pretty = typeof customPrettifiers[k] === "function" ? customPrettifiers[k](v, k, log, { colors: colorizer.colors }) : v;
+				if (errorLikeKeys.includes(k)) errors[k] = pretty;
+				else plain[k] = pretty;
+			}
+			return {
+				plain,
+				errors
+			};
+		}, {
+			plain: {},
+			errors: {}
+		});
+		if (singleLine) {
+			/* istanbul ignore else */
+			if (Object.keys(plain).length > 0) result += objectColorizer.greyMessage(stringifySafe(plain));
+			result += eol;
+			result = result.replace(/\\\\/gi, "\\");
+		} else Object.entries(plain).forEach(([keyName, keyValue]) => {
+			let lines = typeof customPrettifiers[keyName] === "function" ? keyValue : stringifySafe(keyValue, null, 2);
+			if (lines === void 0) return;
+			lines = lines.replace(/\\\\/gi, "\\");
+			const joinedLines = joinLinesWithIndentation({
+				input: lines,
+				ident,
+				eol
+			});
+			result += `${ident}${objectColorizer.property(keyName)}:${joinedLines.startsWith(eol) ? "" : " "}${joinedLines}${eol}`;
+		});
+		Object.entries(errors).forEach(([keyName, keyValue]) => {
+			const lines = typeof customPrettifiers[keyName] === "function" ? keyValue : stringifySafe(keyValue, null, 2);
+			if (lines === void 0) return;
+			result += prettifyError({
+				keyName,
+				lines,
+				eol,
+				ident
+			});
+		});
+		return result;
+	}
+}));
+//#endregion
+//#region ../../node_modules/.pnpm/pino-pretty@13.1.3/node_modules/pino-pretty/lib/utils/prettify-error-log.js
+var require_prettify_error_log = /* @__PURE__ */ __commonJSMin(((exports, module) => {
+	module.exports = prettifyErrorLog;
+	const { LOGGER_KEYS } = require_constants$5();
+	const isObject = require_is_object();
+	const joinLinesWithIndentation = require_join_lines_with_indentation();
+	const prettifyObject = require_prettify_object();
+	/**
+	* @typedef {object} PrettifyErrorLogParams
+	* @property {object} log The error log to prettify.
+	* @property {PrettyContext} context The context object built from parsing
+	* the options.
+	*/
+	/**
+	* Given a log object that has a `type: 'Error'` key, prettify the object and
+	* return the result. In other
+	*
+	* @param {PrettifyErrorLogParams} input
+	*
+	* @returns {string} A string that represents the prettified error log.
+	*/
+	function prettifyErrorLog({ log, context }) {
+		const { EOL: eol, IDENT: ident, errorProps: errorProperties, messageKey } = context;
+		const stack = log.stack;
+		let result = `${ident}${joinLinesWithIndentation({
+			input: stack,
+			ident,
+			eol
+		})}${eol}`;
+		if (errorProperties.length > 0) {
+			const excludeProperties = LOGGER_KEYS.concat(messageKey, "type", "stack");
+			let propertiesToPrint;
+			if (errorProperties[0] === "*") propertiesToPrint = Object.keys(log).filter((k) => excludeProperties.includes(k) === false);
+			else propertiesToPrint = errorProperties.filter((k) => excludeProperties.includes(k) === false);
+			for (let i = 0; i < propertiesToPrint.length; i += 1) {
+				const key = propertiesToPrint[i];
+				if (key in log === false) continue;
+				if (isObject(log[key])) {
+					const prettifiedObject = prettifyObject({
+						log: log[key],
+						excludeLoggerKeys: false,
+						context: {
+							...context,
+							IDENT: ident + ident
+						}
+					});
+					result = `${result}${ident}${key}: {${eol}${prettifiedObject}${ident}}${eol}`;
+					continue;
+				}
+				result = `${result}${ident}${key}: ${log[key]}${eol}`;
+			}
+		}
+		return result;
+	}
+}));
+//#endregion
+//#region ../../node_modules/.pnpm/pino-pretty@13.1.3/node_modules/pino-pretty/lib/utils/prettify-level.js
+var require_prettify_level = /* @__PURE__ */ __commonJSMin(((exports, module) => {
+	module.exports = prettifyLevel;
+	const getPropertyValue = require_get_property_value();
+	/**
+	* @typedef {object} PrettifyLevelParams
+	* @property {object} log The log object.
+	* @property {PrettyContext} context The context object built from parsing
+	* the options.
+	*/
+	/**
+	* Checks if the passed in log has a `level` value and returns a prettified
+	* string for that level if so.
+	*
+	* @param {PrettifyLevelParams} input
+	*
+	* @returns {undefined|string} If `log` does not have a `level` property then
+	* `undefined` will be returned. Otherwise, a string from the specified
+	* `colorizer` is returned.
+	*/
+	function prettifyLevel({ log, context }) {
+		const { colorizer, customLevels, customLevelNames, levelKey, getLevelLabelData } = context;
+		const prettifier = context.customPrettifiers?.level;
+		const output = getPropertyValue(log, levelKey);
+		if (output === void 0) return void 0;
+		const labelColorized = colorizer(output, {
+			customLevels,
+			customLevelNames
+		});
+		if (prettifier) {
+			const [label] = getLevelLabelData(output);
+			return prettifier(output, levelKey, log, {
+				label,
+				labelColorized,
+				colors: colorizer.colors
+			});
+		}
+		return labelColorized;
+	}
+}));
+//#endregion
+//#region ../../node_modules/.pnpm/pino-pretty@13.1.3/node_modules/pino-pretty/lib/utils/prettify-message.js
+var require_prettify_message = /* @__PURE__ */ __commonJSMin(((exports, module) => {
+	module.exports = prettifyMessage;
+	const { LEVELS } = require_constants$5();
+	const getPropertyValue = require_get_property_value();
+	const interpretConditionals = require_interpret_conditionals();
+	/**
+	* @typedef {object} PrettifyMessageParams
+	* @property {object} log The log object with the message to colorize.
+	* @property {PrettyContext} context The context object built from parsing
+	* the options.
+	*/
+	/**
+	* Prettifies a message string if the given `log` has a message property.
+	*
+	* @param {PrettifyMessageParams} input
+	*
+	* @returns {undefined|string} If the message key is not found, or the message
+	* key is not a string, then `undefined` will be returned. Otherwise, a string
+	* that is the prettified message.
+	*/
+	function prettifyMessage({ log, context }) {
+		const { colorizer, customLevels, levelKey, levelLabel, messageFormat, messageKey, useOnlyCustomProps } = context;
+		if (messageFormat && typeof messageFormat === "string") {
+			const parsedMessageFormat = interpretConditionals(messageFormat, log);
+			const message = String(parsedMessageFormat).replace(/{([^{}]+)}/g, function(match, p1) {
+				let level;
+				if (p1 === levelLabel && (level = getPropertyValue(log, levelKey)) !== void 0) return (useOnlyCustomProps ? customLevels === void 0 : customLevels[level] === void 0) ? LEVELS[level] : customLevels[level];
+				const value = getPropertyValue(log, p1);
+				return value !== void 0 ? value : "";
+			});
+			return colorizer.message(message);
+		}
+		if (messageFormat && typeof messageFormat === "function") {
+			const msg = messageFormat(log, messageKey, levelLabel, { colors: colorizer.colors });
+			return colorizer.message(msg);
+		}
+		if (messageKey in log === false) return void 0;
+		if (typeof log[messageKey] !== "string" && typeof log[messageKey] !== "number" && typeof log[messageKey] !== "boolean") return void 0;
+		return colorizer.message(log[messageKey]);
+	}
+}));
+//#endregion
+//#region ../../node_modules/.pnpm/pino-pretty@13.1.3/node_modules/pino-pretty/lib/utils/prettify-metadata.js
+var require_prettify_metadata = /* @__PURE__ */ __commonJSMin(((exports, module) => {
+	module.exports = prettifyMetadata;
+	/**
+	* @typedef {object} PrettifyMetadataParams
+	* @property {object} log The log that may or may not contain metadata to
+	* be prettified.
+	* @property {PrettyContext} context The context object built from parsing
+	* the options.
+	*/
+	/**
+	* Prettifies metadata that is usually present in a Pino log line. It looks for
+	* fields `name`, `pid`, `hostname`, and `caller` and returns a formatted string using
+	* the fields it finds.
+	*
+	* @param {PrettifyMetadataParams} input
+	*
+	* @returns {undefined|string} If no metadata is found then `undefined` is
+	* returned. Otherwise, a string of prettified metadata is returned.
+	*/
+	function prettifyMetadata({ log, context }) {
+		const { customPrettifiers: prettifiers, colorizer } = context;
+		let line = "";
+		if (log.name || log.pid || log.hostname) {
+			line += "(";
+			if (log.name) line += prettifiers.name ? prettifiers.name(log.name, "name", log, { colors: colorizer.colors }) : log.name;
+			if (log.pid) {
+				const prettyPid = prettifiers.pid ? prettifiers.pid(log.pid, "pid", log, { colors: colorizer.colors }) : log.pid;
+				if (log.name && log.pid) line += "/" + prettyPid;
+				else line += prettyPid;
+			}
+			if (log.hostname) {
+				const prettyHostname = prettifiers.hostname ? prettifiers.hostname(log.hostname, "hostname", log, { colors: colorizer.colors }) : log.hostname;
+				line += `${line === "(" ? "on" : " on"} ${prettyHostname}`;
+			}
+			line += ")";
+		}
+		if (log.caller) {
+			const prettyCaller = prettifiers.caller ? prettifiers.caller(log.caller, "caller", log, { colors: colorizer.colors }) : log.caller;
+			line += `${line === "" ? "" : " "}<${prettyCaller}>`;
+		}
+		if (line === "") return;
+		else return line;
+	}
+}));
+//#endregion
+//#region ../../node_modules/.pnpm/pino-pretty@13.1.3/node_modules/pino-pretty/lib/utils/prettify-time.js
+var require_prettify_time = /* @__PURE__ */ __commonJSMin(((exports, module) => {
+	module.exports = prettifyTime;
+	const formatTime = require_format_time();
+	/**
+	* @typedef {object} PrettifyTimeParams
+	* @property {object} log The log object with the timestamp to be prettified.
+	* @property {PrettyContext} context The context object built from parsing
+	* the options.
+	*/
+	/**
+	* Prettifies a timestamp if the given `log` has either `time`, `timestamp` or custom specified timestamp
+	* property.
+	*
+	* @param {PrettifyTimeParams} input
+	*
+	* @returns {undefined|string} If a timestamp property cannot be found then
+	* `undefined` is returned. Otherwise, the prettified time is returned as a
+	* string.
+	*/
+	function prettifyTime({ log, context }) {
+		const { timestampKey, translateTime: translateFormat } = context;
+		const prettifier = context.customPrettifiers?.time;
+		let time = null;
+		if (timestampKey in log) time = log[timestampKey];
+		else if ("timestamp" in log) time = log.timestamp;
+		if (time === null) return void 0;
+		const output = translateFormat ? formatTime(time, translateFormat) : time;
+		return prettifier ? prettifier(output) : `[${output}]`;
+	}
+}));
+//#endregion
+//#region ../../node_modules/.pnpm/pino-pretty@13.1.3/node_modules/pino-pretty/lib/utils/index.js
+var require_utils$2 = /* @__PURE__ */ __commonJSMin(((exports, module) => {
+	module.exports = {
+		buildSafeSonicBoom: require_build_safe_sonic_boom(),
+		createDate: require_create_date(),
+		deleteLogProperty: require_delete_log_property(),
+		filterLog: require_filter_log(),
+		formatTime: require_format_time(),
+		getPropertyValue: require_get_property_value(),
+		handleCustomLevelsNamesOpts: require_handle_custom_levels_names_opts(),
+		handleCustomLevelsOpts: require_handle_custom_levels_opts(),
+		interpretConditionals: require_interpret_conditionals(),
+		isObject: require_is_object(),
+		isValidDate: require_is_valid_date(),
+		joinLinesWithIndentation: require_join_lines_with_indentation(),
+		noop: require_noop(),
+		parseFactoryOptions: require_parse_factory_options(),
+		prettifyErrorLog: require_prettify_error_log(),
+		prettifyError: require_prettify_error(),
+		prettifyLevel: require_prettify_level(),
+		prettifyMessage: require_prettify_message(),
+		prettifyMetadata: require_prettify_metadata(),
+		prettifyObject: require_prettify_object(),
+		prettifyTime: require_prettify_time(),
+		splitPropertyKey: require_split_property_key(),
+		getLevelLabelData: require_get_level_label_data()
+	};
+}));
+/**
+* A hash of log property names mapped to prettifier functions. When the
+* incoming log data is being processed for prettification, any key on the log
+* that matches a key in a custom prettifiers hash will be prettified using
+* that matching custom prettifier. The value passed to the custom prettifier
+* will the value associated with the corresponding log key.
+*
+* The hash may contain any arbitrary keys for arbitrary log properties, but it
+* may also contain a set of predefined key names that map to well-known log
+* properties. These keys are:
+*
+* + `time` (for the timestamp field)
+* + `level` (for the level label field; value may be a level number instead
+* of a level label)
+* + `hostname`
+* + `pid`
+* + `name`
+* + `caller`
+*
+* @typedef {Object.<string, CustomPrettifierFunc>} CustomPrettifiers
+*/
+/**
+* A synchronous function to be used for prettifying a log property. It must
+* return a string.
+*
+* @typedef {function} CustomPrettifierFunc
+* @param {any} value The value to be prettified for the key associated with
+* the prettifier.
+* @returns {string}
+*/
+/**
+* A tokenized string that indicates how the prettified log line should be
+* formatted. Tokens are either log properties enclosed in curly braces, e.g.
+* `{levelLabel}`, `{pid}`, or `{req.url}`, or conditional directives in curly
+* braces. The only conditional directives supported are `if` and `end`, e.g.
+* `{if pid}{pid}{end}`; every `if` must have a matching `end`. Nested
+* conditions are not supported.
+*
+* @typedef {string} MessageFormatString
+*
+* @example
+* `{levelLabel} - {if pid}{pid} - {end}url:{req.url}`
+*/
+/**
+* @typedef {object} PrettifyMessageExtras
+* @property {object} colors Available color functions based on `useColor` (or `colorize`) context
+* the options.
+*/
+/**
+* A function that accepts a log object, name of the message key, and name of
+* the level label key and returns a formatted log line.
+*
+* Note: this function must be synchronous.
+*
+* @typedef {function} MessageFormatFunction
+* @param {object} log The log object to be processed.
+* @param {string} messageKey The name of the key in the `log` object that
+* contains the log message.
+* @param {string} levelLabel The name of the key in the `log` object that
+* contains the log level name.
+* @param {PrettifyMessageExtras} extras Additional data available for message context
+* @returns {string}
+*
+* @example
+* function (log, messageKey, levelLabel) {
+*   return `${log[levelLabel]} - ${log[messageKey]}`
+* }
+*/
+//#endregion
+//#region ../../node_modules/.pnpm/secure-json-parse@4.1.0/node_modules/secure-json-parse/index.js
+var require_secure_json_parse = /* @__PURE__ */ __commonJSMin(((exports, module) => {
+	const hasBuffer = typeof Buffer !== "undefined";
+	const suspectProtoRx = /"(?:_|\\u005[Ff])(?:_|\\u005[Ff])(?:p|\\u0070)(?:r|\\u0072)(?:o|\\u006[Ff])(?:t|\\u0074)(?:o|\\u006[Ff])(?:_|\\u005[Ff])(?:_|\\u005[Ff])"\s*:/;
+	const suspectConstructorRx = /"(?:c|\\u0063)(?:o|\\u006[Ff])(?:n|\\u006[Ee])(?:s|\\u0073)(?:t|\\u0074)(?:r|\\u0072)(?:u|\\u0075)(?:c|\\u0063)(?:t|\\u0074)(?:o|\\u006[Ff])(?:r|\\u0072)"\s*:/;
+	/**
+	* @description Internal parse function that parses JSON text with security checks.
+	* @private
+	* @param {string|Buffer} text - The JSON text string or Buffer to parse.
+	* @param {Function} [reviver] - The JSON.parse() optional reviver argument.
+	* @param {import('./types').ParseOptions} [options] - Optional configuration object.
+	* @returns {*} The parsed object.
+	* @throws {SyntaxError} If a forbidden prototype property is found and `options.protoAction` or
+	* `options.constructorAction` is `'error'`.
+	*/
+	function _parse(text, reviver, options) {
+		if (options == null) {
+			if (reviver !== null && typeof reviver === "object") {
+				options = reviver;
+				reviver = void 0;
+			}
+		}
+		if (hasBuffer && Buffer.isBuffer(text)) text = text.toString();
+		if (text && text.charCodeAt(0) === 65279) text = text.slice(1);
+		const obj = JSON.parse(text, reviver);
+		if (obj === null || typeof obj !== "object") return obj;
+		const protoAction = options && options.protoAction || "error";
+		const constructorAction = options && options.constructorAction || "error";
+		if (protoAction === "ignore" && constructorAction === "ignore") return obj;
+		if (protoAction !== "ignore" && constructorAction !== "ignore") {
+			if (suspectProtoRx.test(text) === false && suspectConstructorRx.test(text) === false) return obj;
+		} else if (protoAction !== "ignore" && constructorAction === "ignore") {
+			if (suspectProtoRx.test(text) === false) return obj;
+		} else if (suspectConstructorRx.test(text) === false) return obj;
+		return filter(obj, {
+			protoAction,
+			constructorAction,
+			safe: options && options.safe
+		});
+	}
+	/**
+	* @description Scans and filters an object for forbidden prototype properties.
+	* @param {Object} obj - The object being scanned.
+	* @param {import('./types').ParseOptions} [options] - Optional configuration object.
+	* @returns {Object|null} The filtered object, or `null` if safe mode is enabled and issues are found.
+	* @throws {SyntaxError} If a forbidden prototype property is found and `options.protoAction` or
+	* `options.constructorAction` is `'error'`.
+	*/
+	function filter(obj, { protoAction = "error", constructorAction = "error", safe } = {}) {
+		let next = [obj];
+		while (next.length) {
+			const nodes = next;
+			next = [];
+			for (const node of nodes) {
+				if (protoAction !== "ignore" && Object.prototype.hasOwnProperty.call(node, "__proto__")) {
+					if (safe === true) return null;
+					else if (protoAction === "error") throw new SyntaxError("Object contains forbidden prototype property");
+					delete node.__proto__;
+				}
+				if (constructorAction !== "ignore" && Object.prototype.hasOwnProperty.call(node, "constructor") && node.constructor !== null && typeof node.constructor === "object" && Object.prototype.hasOwnProperty.call(node.constructor, "prototype")) {
+					if (safe === true) return null;
+					else if (constructorAction === "error") throw new SyntaxError("Object contains forbidden prototype property");
+					delete node.constructor;
+				}
+				for (const key in node) {
+					const value = node[key];
+					if (value && typeof value === "object") next.push(value);
+				}
+			}
+		}
+		return obj;
+	}
+	/**
+	* @description Parses a given JSON-formatted text into an object.
+	* @param {string|Buffer} text - The JSON text string or Buffer to parse.
+	* @param {Function} [reviver] - The `JSON.parse()` optional reviver argument, or options object.
+	* @param {import('./types').ParseOptions} [options] - Optional configuration object.
+	* @returns {*} The parsed object.
+	* @throws {SyntaxError} If the JSON text is malformed or contains forbidden prototype properties
+	* when `options.protoAction` or `options.constructorAction` is `'error'`.
+	*/
+	function parse(text, reviver, options) {
+		const { stackTraceLimit } = Error;
+		Error.stackTraceLimit = 0;
+		try {
+			return _parse(text, reviver, options);
+		} finally {
+			Error.stackTraceLimit = stackTraceLimit;
+		}
+	}
+	/**
+	* @description Safely parses a given JSON-formatted text into an object.
+	* @param {string|Buffer} text - The JSON text string or Buffer to parse.
+	* @param {Function} [reviver] - The `JSON.parse()` optional reviver argument.
+	* @returns {*|null|undefined} The parsed object, `null` if security issues found, or `undefined` on parse error.
+	*/
+	function safeParse(text, reviver) {
+		const { stackTraceLimit } = Error;
+		Error.stackTraceLimit = 0;
+		try {
+			return _parse(text, reviver, { safe: true });
+		} catch {
+			return;
+		} finally {
+			Error.stackTraceLimit = stackTraceLimit;
+		}
+	}
+	module.exports = parse;
+	module.exports.default = parse;
+	module.exports.parse = parse;
+	module.exports.safeParse = safeParse;
+	module.exports.scan = filter;
+}));
+//#endregion
+//#region ../../node_modules/.pnpm/pino-pretty@13.1.3/node_modules/pino-pretty/lib/pretty.js
+var require_pretty = /* @__PURE__ */ __commonJSMin(((exports, module) => {
+	module.exports = pretty;
+	const sjs = require_secure_json_parse();
+	const isObject = require_is_object();
+	const prettifyErrorLog = require_prettify_error_log();
+	const prettifyLevel = require_prettify_level();
+	const prettifyMessage = require_prettify_message();
+	const prettifyMetadata = require_prettify_metadata();
+	const prettifyObject = require_prettify_object();
+	const prettifyTime = require_prettify_time();
+	const filterLog = require_filter_log();
+	const { LEVELS, LEVEL_KEY, LEVEL_NAMES } = require_constants$5();
+	const jsonParser = (input) => {
+		try {
+			return { value: sjs.parse(input, { protoAction: "remove" }) };
+		} catch (err) {
+			return { err };
+		}
+	};
+	/**
+	* Orchestrates processing the received log data according to the provided
+	* configuration and returns a prettified log string.
+	*
+	* @typedef {function} LogPrettifierFunc
+	* @param {string|object} inputData A log string or a log-like object.
+	* @returns {string} A string that represents the prettified log data.
+	*/
+	function pretty(inputData) {
+		let log;
+		if (!isObject(inputData)) {
+			const parsed = jsonParser(inputData);
+			if (parsed.err || !isObject(parsed.value)) return inputData + this.EOL;
+			log = parsed.value;
+		} else log = inputData;
+		if (this.minimumLevel) {
+			let condition;
+			if (this.useOnlyCustomProps) condition = this.customLevels;
+			else condition = this.customLevelNames[this.minimumLevel] !== void 0;
+			let minimum;
+			if (condition) minimum = this.customLevelNames[this.minimumLevel];
+			else minimum = LEVEL_NAMES[this.minimumLevel];
+			if (!minimum) minimum = typeof this.minimumLevel === "string" ? LEVEL_NAMES[this.minimumLevel] : LEVEL_NAMES[LEVELS[this.minimumLevel].toLowerCase()];
+			if (log[this.levelKey === void 0 ? LEVEL_KEY : this.levelKey] < minimum) return;
+		}
+		const prettifiedMessage = prettifyMessage({
+			log,
+			context: this.context
+		});
+		if (this.ignoreKeys || this.includeKeys) log = filterLog({
+			log,
+			context: this.context
+		});
+		const prettifiedLevel = prettifyLevel({
+			log,
+			context: {
+				...this.context,
+				...this.context.customProperties
+			}
+		});
+		const prettifiedMetadata = prettifyMetadata({
+			log,
+			context: this.context
+		});
+		const prettifiedTime = prettifyTime({
+			log,
+			context: this.context
+		});
+		let line = "";
+		if (this.levelFirst && prettifiedLevel) line = `${prettifiedLevel}`;
+		if (prettifiedTime && line === "") line = `${prettifiedTime}`;
+		else if (prettifiedTime) line = `${line} ${prettifiedTime}`;
+		if (!this.levelFirst && prettifiedLevel) if (line.length > 0) line = `${line} ${prettifiedLevel}`;
+		else line = prettifiedLevel;
+		if (prettifiedMetadata) if (line.length > 0) line = `${line} ${prettifiedMetadata}:`;
+		else line = prettifiedMetadata;
+		if (line.endsWith(":") === false && line !== "") line += ":";
+		if (prettifiedMessage !== void 0) if (line.length > 0) line = `${line} ${prettifiedMessage}`;
+		else line = prettifiedMessage;
+		if (line.length > 0 && !this.singleLine) line += this.EOL;
+		if (log.type === "Error" && typeof log.stack === "string") {
+			const prettifiedErrorLog = prettifyErrorLog({
+				log,
+				context: this.context
+			});
+			if (this.singleLine) line += this.EOL;
+			line += prettifiedErrorLog;
+		} else if (this.hideObject === false) {
+			const skipKeys = [
+				this.messageKey,
+				this.levelKey,
+				this.timestampKey
+			].map((key) => key.replaceAll(/\\/g, "")).filter((key) => {
+				return typeof log[key] === "string" || typeof log[key] === "number" || typeof log[key] === "boolean";
+			});
+			const prettifiedObject = prettifyObject({
+				log,
+				skipKeys,
+				context: this.context
+			});
+			if (this.singleLine && !/^\s$/.test(prettifiedObject)) line += " ";
+			line += prettifiedObject;
+		}
+		return line;
+	}
+}));
+//#endregion
+//#region ../../node_modules/.pnpm/pino-pretty@13.1.3/node_modules/pino-pretty/index.js
+var require_pino_pretty = /* @__PURE__ */ __commonJSMin(((exports, module) => {
+	const { isColorSupported } = require_colorette();
+	const pump = require_pump();
+	const { Transform } = __require("node:stream");
+	const abstractTransport = require_pino_abstract_transport();
+	const colors = require_colors();
+	const { ERROR_LIKE_KEYS, LEVEL_KEY, LEVEL_LABEL, MESSAGE_KEY, TIMESTAMP_KEY } = require_constants$5();
+	const { buildSafeSonicBoom, parseFactoryOptions } = require_utils$2();
+	const pretty = require_pretty();
+	/**
+	* @typedef {object} PinoPrettyOptions
+	* @property {boolean} [colorize] Indicates if colors should be used when
+	* prettifying. The default will be determined by the terminal capabilities at
+	* run time.
+	* @property {boolean} [colorizeObjects=true] Apply coloring to rendered objects
+	* when coloring is enabled.
+	* @property {boolean} [crlf=false] End lines with `\r\n` instead of `\n`.
+	* @property {string|null} [customColors=null] A comma separated list of colors
+	* to use for specific level labels, e.g. `err:red,info:blue`.
+	* @property {string|null} [customLevels=null] A comma separated list of user
+	* defined level names and numbers, e.g. `err:99,info:1`.
+	* @property {CustomPrettifiers} [customPrettifiers={}] A set of prettifier
+	* functions to apply to keys defined in this object.
+	* @property {K_ERROR_LIKE_KEYS} [errorLikeObjectKeys] A list of string property
+	* names to consider as error objects.
+	* @property {string} [errorProps=''] A comma separated list of properties on
+	* error objects to include in the output.
+	* @property {boolean} [hideObject=false] When `true`, data objects will be
+	* omitted from the output (except for error objects).
+	* @property {string} [ignore='hostname'] A comma separated list of log keys
+	* to omit when outputting the prettified log information.
+	* @property {undefined|string} [include=undefined] A comma separated list of
+	* log keys to include in the prettified log information. Only the keys in this
+	* list will be included in the output.
+	* @property {boolean} [levelFirst=false] When true, the log level will be the
+	* first field in the prettified output.
+	* @property {string} [levelKey='level'] The key name in the log data that
+	* contains the level value for the log.
+	* @property {string} [levelLabel='levelLabel'] Token name to use in
+	* `messageFormat` to represent the name of the logged level.
+	* @property {null|MessageFormatString|MessageFormatFunction} [messageFormat=null]
+	* When a string, defines how the prettified line should be formatted according
+	* to defined tokens. When a function, a synchronous function that returns a
+	* formatted string.
+	* @property {string} [messageKey='msg'] Defines the key in incoming logs that
+	* contains the message of the log, if present.
+	* @property {undefined|string|number} [minimumLevel=undefined] The minimum
+	* level for logs that should be processed. Any logs below this level will
+	* be omitted.
+	* @property {object} [outputStream=process.stdout] The stream to write
+	* prettified log lines to.
+	* @property {boolean} [singleLine=false] When `true` any objects, except error
+	* objects, in the log data will be printed as a single line instead as multiple
+	* lines.
+	* @property {string} [timestampKey='time'] Defines the key in incoming logs
+	* that contains the timestamp of the log, if present.
+	* @property {boolean|string} [translateTime=true] When true, will translate a
+	* JavaScript date integer into a human-readable string. If set to a string,
+	* it must be a format string.
+	* @property {boolean} [useOnlyCustomProps=true] When true, only custom levels
+	* and colors will be used if they have been provided.
+	*/
+	/**
+	* The default options that will be used when prettifying log lines.
+	*
+	* @type {PinoPrettyOptions}
+	*/
+	const defaultOptions = {
+		colorize: isColorSupported,
+		colorizeObjects: true,
+		crlf: false,
+		customColors: null,
+		customLevels: null,
+		customPrettifiers: {},
+		errorLikeObjectKeys: ERROR_LIKE_KEYS,
+		errorProps: "",
+		hideObject: false,
+		ignore: "hostname",
+		include: void 0,
+		levelFirst: false,
+		levelKey: LEVEL_KEY,
+		levelLabel: LEVEL_LABEL,
+		messageFormat: null,
+		messageKey: MESSAGE_KEY,
+		minimumLevel: void 0,
+		outputStream: process.stdout,
+		singleLine: false,
+		timestampKey: TIMESTAMP_KEY,
+		translateTime: true,
+		useOnlyCustomProps: true
+	};
+	/**
+	* Processes the supplied options and returns a function that accepts log data
+	* and produces a prettified log string.
+	*
+	* @param {PinoPrettyOptions} options Configuration for the prettifier.
+	* @returns {LogPrettifierFunc}
+	*/
+	function prettyFactory(options) {
+		const context = parseFactoryOptions(Object.assign({}, defaultOptions, options));
+		return pretty.bind({
+			...context,
+			context
+		});
+	}
+	/**
+	* @typedef {PinoPrettyOptions} BuildStreamOpts
+	* @property {object|number|string} [destination] A destination stream, file
+	* descriptor, or target path to a file.
+	* @property {boolean} [append]
+	* @property {boolean} [mkdir]
+	* @property {boolean} [sync=false]
+	*/
+	/**
+	* Constructs a {@link LogPrettifierFunc} and a stream to which the produced
+	* prettified log data will be written.
+	*
+	* @param {BuildStreamOpts} opts
+	* @returns {Transform | (Transform & OnUnknown)}
+	*/
+	function build(opts = {}) {
+		let pretty = prettyFactory(opts);
+		let destination;
+		return abstractTransport(function(source) {
+			source.on("message", function pinoConfigListener(message) {
+				if (!message || message.code !== "PINO_CONFIG") return;
+				Object.assign(opts, {
+					messageKey: message.config.messageKey,
+					errorLikeObjectKeys: Array.from(new Set([...opts.errorLikeObjectKeys || ERROR_LIKE_KEYS, message.config.errorKey])),
+					customLevels: message.config.levels.values
+				});
+				pretty = prettyFactory(opts);
+				source.off("message", pinoConfigListener);
+			});
+			const stream = new Transform({
+				objectMode: true,
+				autoDestroy: true,
+				transform(chunk, enc, cb) {
+					cb(null, pretty(chunk));
+				}
+			});
+			if (typeof opts.destination === "object" && typeof opts.destination.write === "function") destination = opts.destination;
+			else destination = buildSafeSonicBoom({
+				dest: opts.destination || 1,
+				append: opts.append,
+				mkdir: opts.mkdir,
+				sync: opts.sync
+			});
+			source.on("unknown", function(line) {
+				destination.write(line + "\n");
+			});
+			pump(source, stream, destination);
+			return stream;
+		}, {
+			parse: "lines",
+			close(err, cb) {
+				destination.on("close", () => {
+					cb(err);
+				});
+			}
+		});
+	}
+	module.exports = build;
+	module.exports.build = build;
+	module.exports.PinoPretty = build;
+	module.exports.prettyFactory = prettyFactory;
+	module.exports.colorizerFactory = colors;
+	module.exports.isColorSupported = isColorSupported;
+	module.exports.default = build;
 }));
 //#endregion
 //#region ../../node_modules/.pnpm/readable-stream@4.7.0/node_modules/readable-stream/lib/ours/primordials.js
@@ -29771,6 +32598,7 @@ var require_build = /* @__PURE__ */ __commonJSMin(((exports) => {
 //#endregion
 //#region src/services/broker.ts
 var import_pino = /* @__PURE__ */ __toESM(require_pino(), 1);
+var import_pino_pretty = /* @__PURE__ */ __toESM(require_pino_pretty(), 1);
 var import_build = /* @__PURE__ */ __toESM(require_build(), 1);
 function cleanMqttOptions(config, clientId) {
 	const options = { clientId };
@@ -29969,6 +32797,123 @@ function mapBrokerError(err) {
 	if (message.includes("Unacceptable protocol version") || message.includes("unacceptable protocol version") || message.includes("Connection refused: Unacceptable protocol version")) return "Unacceptable MQTT protocol version. The broker does not support the requested protocol level.";
 	return message || "Failed to establish a connection to the MQTT broker.";
 }
+//#endregion
+//#region ../../node_modules/.pnpm/hono@4.12.21/node_modules/hono/dist/utils/cookie.js
+var validCookieNameRegEx = /^[\w!#$%&'*.^`|~+-]+$/;
+var validCookieValueRegEx = /^[ !#-:<-[\]-~]*$/;
+var trimCookieWhitespace = (value) => {
+	let start = 0;
+	let end = value.length;
+	while (start < end) {
+		const charCode = value.charCodeAt(start);
+		if (charCode !== 32 && charCode !== 9) break;
+		start++;
+	}
+	while (end > start) {
+		const charCode = value.charCodeAt(end - 1);
+		if (charCode !== 32 && charCode !== 9) break;
+		end--;
+	}
+	return start === 0 && end === value.length ? value : value.slice(start, end);
+};
+var parse = (cookie, name) => {
+	if (name && cookie.indexOf(name) === -1) return {};
+	const pairs = cookie.split(";");
+	const parsedCookie = /* @__PURE__ */ Object.create(null);
+	for (const pairStr of pairs) {
+		const valueStartPos = pairStr.indexOf("=");
+		if (valueStartPos === -1) continue;
+		const cookieName = trimCookieWhitespace(pairStr.substring(0, valueStartPos));
+		if (name && name !== cookieName || !validCookieNameRegEx.test(cookieName) || cookieName in parsedCookie) continue;
+		let cookieValue = trimCookieWhitespace(pairStr.substring(valueStartPos + 1));
+		if (cookieValue.startsWith("\"") && cookieValue.endsWith("\"")) cookieValue = cookieValue.slice(1, -1);
+		if (validCookieValueRegEx.test(cookieValue)) {
+			parsedCookie[cookieName] = cookieValue.indexOf("%") !== -1 ? tryDecode(cookieValue, decodeURIComponent_) : cookieValue;
+			if (name) break;
+		}
+	}
+	return parsedCookie;
+};
+//#endregion
+//#region ../../node_modules/.pnpm/hono@4.12.21/node_modules/hono/dist/helper/cookie/index.js
+var getCookie = (c, key, prefix) => {
+	const cookie = c.req.raw.headers.get("Cookie");
+	if (typeof key === "string") {
+		if (!cookie) return;
+		let finalKey = key;
+		if (prefix === "secure") finalKey = "__Secure-" + key;
+		else if (prefix === "host") finalKey = "__Host-" + key;
+		return parse(cookie, finalKey)[finalKey];
+	}
+	if (!cookie) return {};
+	return parse(cookie);
+};
+//#endregion
+//#region ../../node_modules/.pnpm/hono@4.12.21/node_modules/hono/dist/utils/buffer.js
+var bufferToFormData = (arrayBuffer, contentType) => {
+	return new Response(arrayBuffer, { headers: { "Content-Type": contentType } }).formData();
+};
+//#endregion
+//#region ../../node_modules/.pnpm/hono@4.12.21/node_modules/hono/dist/validator/validator.js
+var jsonRegex = /^application\/([a-z-\.]+\+)?json(;\s*[a-zA-Z0-9\-]+\=([^;]+))*$/;
+var multipartRegex = /^multipart\/form-data(;\s?boundary=[a-zA-Z0-9'"()+_,\-./:=?]+)?$/;
+var urlencodedRegex = /^application\/x-www-form-urlencoded(;\s*[a-zA-Z0-9\-]+\=([^;]+))*$/;
+var validator = (target, validationFunc) => {
+	return async (c, next) => {
+		let value = {};
+		const contentType = c.req.header("Content-Type");
+		switch (target) {
+			case "json":
+				if (!contentType || !jsonRegex.test(contentType)) break;
+				try {
+					value = await c.req.json();
+				} catch {
+					throw new HTTPException(400, { message: "Malformed JSON in request body" });
+				}
+				break;
+			case "form": {
+				if (!contentType || !(multipartRegex.test(contentType) || urlencodedRegex.test(contentType))) break;
+				let formData;
+				if (c.req.bodyCache.formData) formData = await c.req.bodyCache.formData;
+				else try {
+					formData = await bufferToFormData(await c.req.arrayBuffer(), contentType);
+					c.req.bodyCache.formData = formData;
+				} catch (e) {
+					let message = "Malformed FormData request.";
+					message += e instanceof Error ? ` ${e.message}` : ` ${String(e)}`;
+					throw new HTTPException(400, { message });
+				}
+				const form = /* @__PURE__ */ Object.create(null);
+				formData.forEach((value2, key) => {
+					if (key.endsWith("[]")) (form[key] ??= []).push(value2);
+					else if (Array.isArray(form[key])) form[key].push(value2);
+					else if (Object.hasOwn(form, key)) form[key] = [form[key], value2];
+					else form[key] = value2;
+				});
+				value = form;
+				break;
+			}
+			case "query":
+				value = Object.fromEntries(Object.entries(c.req.queries()).map(([k, v]) => {
+					return v.length === 1 ? [k, v[0]] : [k, v];
+				}));
+				break;
+			case "param":
+				value = c.req.param();
+				break;
+			case "header":
+				value = c.req.header();
+				break;
+			case "cookie":
+				value = getCookie(c);
+				break;
+		}
+		const res = await validationFunc(value, c);
+		if (res instanceof Response) return res;
+		c.req.addValidatedData(target, res);
+		return await next();
+	};
+};
 const DEFAULT_CONFIG = {
 	lang: void 0,
 	message: void 0,
@@ -30376,6 +33321,142 @@ const brokerRoutes = new Hono().post("/", vValidator("json", brokerConfigSchema,
 	}
 });
 //#endregion
+//#region ../../node_modules/.pnpm/hono@4.12.21/node_modules/hono/dist/utils/stream.js
+var StreamingApi = class {
+	writer;
+	encoder;
+	writable;
+	abortSubscribers = [];
+	responseReadable;
+	/**
+	* Whether the stream has been aborted.
+	*/
+	aborted = false;
+	/**
+	* Whether the stream has been closed normally.
+	*/
+	closed = false;
+	constructor(writable, _readable) {
+		this.writable = writable;
+		this.writer = writable.getWriter();
+		this.encoder = new TextEncoder();
+		const reader = _readable.getReader();
+		this.abortSubscribers.push(async () => {
+			await reader.cancel();
+		});
+		this.responseReadable = new ReadableStream({
+			async pull(controller) {
+				const { done, value } = await reader.read();
+				done ? controller.close() : controller.enqueue(value);
+			},
+			cancel: () => {
+				if (!this.closed) this.abort();
+			}
+		});
+	}
+	async write(input) {
+		try {
+			if (typeof input === "string") input = this.encoder.encode(input);
+			await this.writer.write(input);
+		} catch {}
+		return this;
+	}
+	async writeln(input) {
+		await this.write(input + "\n");
+		return this;
+	}
+	sleep(ms) {
+		return new Promise((res) => setTimeout(res, ms));
+	}
+	async close() {
+		this.closed = true;
+		try {
+			await this.writer.close();
+		} catch {}
+	}
+	async pipe(body) {
+		this.writer.releaseLock();
+		await body.pipeTo(this.writable, { preventClose: true });
+		this.writer = this.writable.getWriter();
+	}
+	onAbort(listener) {
+		this.abortSubscribers.push(listener);
+	}
+	/**
+	* Abort the stream.
+	* You can call this method when stream is aborted by external event.
+	*/
+	abort() {
+		if (!this.aborted) {
+			this.aborted = true;
+			this.abortSubscribers.forEach((subscriber) => subscriber());
+		}
+	}
+};
+//#endregion
+//#region ../../node_modules/.pnpm/hono@4.12.21/node_modules/hono/dist/helper/streaming/utils.js
+var isOldBunVersion = () => {
+	const version = typeof Bun !== "undefined" ? Bun.version : void 0;
+	if (version === void 0) return false;
+	const result = version.startsWith("1.1") || version.startsWith("1.0") || version.startsWith("0.");
+	isOldBunVersion = () => result;
+	return result;
+};
+//#endregion
+//#region ../../node_modules/.pnpm/hono@4.12.21/node_modules/hono/dist/helper/streaming/sse.js
+var SSEStreamingApi = class extends StreamingApi {
+	constructor(writable, readable) {
+		super(writable, readable);
+	}
+	async writeSSE(message) {
+		const dataLines = (await resolveCallback(message.data, HtmlEscapedCallbackPhase.Stringify, false, {})).split(/\r\n|\r|\n/).map((line) => {
+			return `data: ${line}`;
+		}).join("\n");
+		for (const key of [
+			"event",
+			"id",
+			"retry"
+		]) if (message[key] && /[\r\n]/.test(message[key])) throw new Error(`${key} must not contain "\\r" or "\\n"`);
+		const sseData = [
+			message.event && `event: ${message.event}`,
+			dataLines,
+			message.id && `id: ${message.id}`,
+			message.retry && `retry: ${message.retry}`
+		].filter(Boolean).join("\n") + "\n\n";
+		await this.write(sseData);
+	}
+};
+var run = async (stream, cb, onError) => {
+	try {
+		await cb(stream);
+	} catch (e) {
+		if (e instanceof Error && onError) {
+			await onError(e, stream);
+			await stream.writeSSE({
+				event: "error",
+				data: e.message
+			});
+		} else console.error(e);
+	} finally {
+		stream.close();
+	}
+};
+var contextStash = /* @__PURE__ */ new WeakMap();
+var streamSSE = (c, cb, onError) => {
+	const { readable, writable } = new TransformStream();
+	const stream = new SSEStreamingApi(writable, readable);
+	if (isOldBunVersion()) c.req.raw.signal.addEventListener("abort", () => {
+		if (!stream.closed) stream.abort();
+	});
+	contextStash.set(stream.responseReadable, c);
+	c.header("Transfer-Encoding", "chunked");
+	c.header("Content-Type", "text/event-stream");
+	c.header("Cache-Control", "no-cache");
+	c.header("Connection", "keep-alive");
+	run(stream, cb, onError);
+	return c.newResponse(stream.responseReadable);
+};
+//#endregion
 //#region src/utils/cors.ts
 const ALLOWED_ORIGIN_REGEXES = [
 	/^https?:\/\/localhost(:\d+)?$/,
@@ -30438,7 +33519,7 @@ function b$1(e, { default: n, alias: t, ...d } = {}) {
 //#region src/services/config.ts
 const args = b$1(process.argv.slice(2), {
 	string: ["host", "log-level"],
-	boolean: ["open", "no-open"],
+	boolean: ["help"],
 	alias: {
 		p: "port",
 		h: "host",
@@ -30446,22 +33527,34 @@ const args = b$1(process.argv.slice(2), {
 	},
 	default: {
 		host: "127.0.0.1",
-		"log-level": process.env.LOG_LEVEL ?? "info",
-		open: true
+		"log-level": process.env.LOG_LEVEL ?? "info"
 	}
 });
+if (args.help || args._.includes("help")) {
+	console.log(`MQTT Radar Connector 📡
+
+Usage:
+  npx github:t128n/mqtt-radar [options]
+
+Options:
+  -p, --port <number>              Connector HTTP server port (default: 3881, auto-selects 3881-3900 if occupied)
+  -h, --host <string>              Loopback host address to bind the connector to (default: 127.0.0.1)
+  -l, --log-level <string>         Logging verbosity (trace, debug, info, warn, error) (default: info)
+  --batch-window <number>          Buffer window duration in ms for outbound SSE events (default: 100)
+  --batch-limit <number>           Maximum number of buffered events in a single SSE push (default: 100)
+  --backpressure-limit <number>    Maximum number of queued SSE events in memory before dropping (default: 500)
+  --help                           Show this help menu`);
+	process.exit(0);
+}
 function parseNumber(value, defaultValue) {
 	if (value === void 0 || value === null) return defaultValue;
 	const parsed = Number(value);
 	return Number.isNaN(parsed) ? defaultValue : parsed;
 }
-const port = args.port !== void 0 ? Number(args.port) : void 0;
-const openBrowser = args.open !== false && !args["no-open"];
 const config = {
-	port,
+	port: args.port !== void 0 ? Number(args.port) : void 0,
 	host: String(args.host),
 	logLevel: String(args["log-level"]),
-	openBrowser,
 	batchWindow: parseNumber(args["batch-window"], 100),
 	batchLimit: parseNumber(args["batch-limit"], 100),
 	backpressureLimit: parseNumber(args["backpressure-limit"], 500)
@@ -30617,6 +33710,70 @@ const eventRoutes = new Hono().get("/", vValidator("query", eventsQuerySchema, (
 		}
 	});
 });
+//#endregion
+//#region ../../node_modules/.pnpm/hono@4.12.21/node_modules/hono/dist/middleware/cors/index.js
+var cors = (options) => {
+	const opts = {
+		origin: "*",
+		allowMethods: [
+			"GET",
+			"HEAD",
+			"PUT",
+			"POST",
+			"DELETE",
+			"PATCH"
+		],
+		allowHeaders: [],
+		exposeHeaders: [],
+		...options
+	};
+	const findAllowOrigin = ((optsOrigin) => {
+		if (typeof optsOrigin === "string") if (optsOrigin === "*") {
+			if (opts.credentials) return (origin) => origin || null;
+			return () => optsOrigin;
+		} else return (origin) => optsOrigin === origin ? origin : null;
+		else if (typeof optsOrigin === "function") return optsOrigin;
+		else return (origin) => optsOrigin.includes(origin) ? origin : null;
+	})(opts.origin);
+	const findAllowMethods = ((optsAllowMethods) => {
+		if (typeof optsAllowMethods === "function") return optsAllowMethods;
+		else if (Array.isArray(optsAllowMethods)) return () => optsAllowMethods;
+		else return () => [];
+	})(opts.allowMethods);
+	return async function cors2(c, next) {
+		function set(key, value) {
+			c.res.headers.set(key, value);
+		}
+		const allowOrigin = await findAllowOrigin(c.req.header("origin") || "", c);
+		if (allowOrigin) set("Access-Control-Allow-Origin", allowOrigin);
+		if (opts.credentials) set("Access-Control-Allow-Credentials", "true");
+		if (opts.exposeHeaders?.length) set("Access-Control-Expose-Headers", opts.exposeHeaders.join(","));
+		if (c.req.method === "OPTIONS") {
+			if (opts.origin !== "*" || opts.credentials) set("Vary", "Origin");
+			if (opts.maxAge != null) set("Access-Control-Max-Age", opts.maxAge.toString());
+			const allowMethods = await findAllowMethods(c.req.header("origin") || "", c);
+			if (allowMethods.length) set("Access-Control-Allow-Methods", allowMethods.join(","));
+			let headers = opts.allowHeaders;
+			if (!headers?.length) {
+				const requestHeaders = c.req.header("Access-Control-Request-Headers");
+				if (requestHeaders) headers = requestHeaders.split(/\s*,\s*/);
+			}
+			if (headers?.length) {
+				set("Access-Control-Allow-Headers", headers.join(","));
+				c.res.headers.append("Vary", "Access-Control-Request-Headers");
+			}
+			c.res.headers.delete("Content-Length");
+			c.res.headers.delete("Content-Type");
+			return new Response(null, {
+				headers: c.res.headers,
+				status: 204,
+				statusText: "No Content"
+			});
+		}
+		await next();
+		if (opts.origin !== "*" || opts.credentials) c.header("Vary", "Origin", { append: true });
+	};
+};
 //#endregion
 //#region ../../node_modules/.pnpm/std-env@4.1.0/node_modules/std-env/dist/index.mjs
 const e = globalThis.process?.env || Object.create(null), t = globalThis.process || { env: e }, n = t !== void 0 && t.env && t.env.NODE_ENV || void 0, r = [
@@ -30804,13 +33961,7 @@ async function main() {
 		portRange: [3881, 3900],
 		name: "mqtt-radar-connector"
 	});
-	const rootLogger = (0, import_pino.default)({
-		level: config.logLevel,
-		transport: {
-			target: "pino-pretty",
-			options: { colorize: true }
-		}
-	});
+	const rootLogger = (0, import_pino.default)({ level: config.logLevel }, (0, import_pino_pretty.default)({ colorize: true }));
 	brokerService.setLogger(rootLogger);
 	const app = new Hono();
 	app.use(requestId());
@@ -30856,21 +34007,12 @@ async function main() {
 		port,
 		hostname: config.host
 	}, (info) => {
-		const pairingUrl = `${b || !process.env.NODE_ENV || process.env.NODE_ENV === "development" || process.env.NODE_ENV === "dev" ? "http://localhost:5173" : "https://mqtt.t128n.dev"}/?connector=http://${config.host === "0.0.0.0" ? "127.0.0.1" : config.host}:${info.port}`;
+		const pairingUrl = `${b || process.env.NODE_ENV === "development" || process.env.NODE_ENV === "dev" ? "http://localhost:5173" : "https://t128n.github.io/mqtt-radar"}/?connector=http://${config.host === "0.0.0.0" ? "127.0.0.1" : config.host}:${info.port}`;
 		rootLogger.info({
 			port: info.port,
 			pairingUrl,
 			instructions: "Open the pairingUrl in your browser to automatically pair the frontend."
 		}, `mqtt-radar-connector listening on ${config.host}`);
-		if (config.openBrowser) {
-			let openCmd = "open";
-			if (process.platform === "win32") openCmd = "start";
-			else if (process.platform === "linux") openCmd = "xdg-open";
-			exec(`${openCmd} "${pairingUrl}"`, (err) => {
-				if (err) rootLogger.error({ err }, "failed to open browser automatically");
-				else rootLogger.info("automatically opened pairing URL in browser");
-			});
-		} else rootLogger.info("automatic browser open disabled");
 	});
 }
 main().catch((err) => {

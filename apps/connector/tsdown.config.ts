@@ -12,7 +12,8 @@ export default defineConfig({
   // Produce .mjs so Node treats it as ESM regardless of package.json "type"
   outExtensions: () => ({ js: ".mjs" }),
   // Bundle everything — this is a standalone CLI binary
-  deps: { alwaysBundle: [".*", "*", "@*/*"] },
+  deps: { alwaysBundle: [/.*/] },
   clean: true,
+  shims: true,
   sourcemap: false,
 });

@@ -10,8 +10,10 @@
   let {
     node,
     level = 0,
-    selectedTopic = $bindable(""),
-    onSelect
+    expanded = false,
+    selectedTopic = "",
+    onSelect,
+    onToggle
   } = $props<{
     node: {
       name: string;
@@ -19,87 +21,77 @@
       children: Map<string, any>;
     };
     level?: number;
+    expanded?: boolean;
     selectedTopic?: string;
     onSelect?: (topic: string) => void;
+    onToggle?: () => void;
   }>();
-
-  let expanded = $state(true);
 
   const hasChildren = $derived(node.children && node.children.size > 0);
   const isSelected = $derived(selectedTopic === node.fullName);
 
-  function toggle() {
-    expanded = !expanded;
+  function handleSelect() {
+    if (onSelect) {
+      onSelect(selectedTopic === node.fullName ? "" : node.fullName);
+    }
   }
 
-  function handleSelect() {
-    if (!hasChildren) {
-      if (selectedTopic === node.fullName) {
-        selectedTopic = "";
-      } else {
-        selectedTopic = node.fullName;
-      }
-      if (onSelect) onSelect(selectedTopic);
-    } else {
-      toggle();
-    }
+  function handleToggle(e: Event) {
+    e.stopPropagation();
+    if (onToggle) onToggle();
   }
 </script>
 
-<div class="flex flex-col select-none">
-  <!-- Node row -->
-  <button
-    type="button"
-    class="flex items-center gap-1.5 py-1 px-2 rounded hover:bg-muted/30 text-left font-mono text-[11px] transition-colors duration-150 group cursor-pointer border-0 w-full"
+<div class="relative flex flex-col select-none w-full mb-0.5">
+  <!-- Render guide lines for levels -->
+  {#each Array(level) as _, i}
+    <div class="absolute top-0 bottom-[-2px] border-l border-border/30 pointer-events-none" style="left: {14 + i * 12}px"></div>
+  {/each}
+
+  <div
+    class="flex items-center gap-1.5 py-1 px-2 rounded hover:bg-muted/30 text-left font-mono text-[11px] transition-colors duration-150 group cursor-pointer border-0 w-full relative z-10"
     style="padding-left: {8 + level * 12}px"
     class:bg-muted={isSelected}
     class:text-foreground={isSelected}
     class:text-muted-foreground={!isSelected}
     onclick={handleSelect}
+    onkeydown={(e) => e.key === 'Enter' && handleSelect()}
+    role="button"
+    tabindex="0"
   >
     {#if hasChildren}
-      <span class="w-3 h-3 flex items-center justify-center text-muted-foreground/60 hover:text-foreground">
+      <button
+        type="button"
+        class="w-3 h-3 flex items-center justify-center text-muted-foreground/60 hover:text-foreground border-0 bg-transparent p-0 cursor-pointer shrink-0"
+        onclick={handleToggle}
+        aria-label="Toggle folder"
+      >
         {#if expanded}
           <ChevronDown size="11" />
         {:else}
           <ChevronRight size="11" />
         {/if}
-      </span>
-      <span class="text-muted-foreground/80 group-hover:text-foreground transition-colors shrink-0">
+      </button>
+      <button
+        type="button"
+        class="text-muted-foreground/80 group-hover:text-foreground transition-colors shrink-0 border-0 bg-transparent p-0 cursor-pointer flex items-center"
+        onclick={handleToggle}
+        aria-label="Toggle folder"
+      >
         {#if expanded}
           <FolderOpen size="12" />
         {:else}
           <Folder size="12" />
         {/if}
-      </span>
+      </button>
     {:else}
-      <span class="w-3 h-3"></span>
-      <span class="text-muted-foreground/40 group-hover:text-muted-foreground transition-colors shrink-0">
+      <span class="w-3 h-3 shrink-0"></span>
+      <span class="text-muted-foreground/40 group-hover:text-muted-foreground transition-colors shrink-0 flex items-center justify-center">
         <Hash size="11" />
       </span>
     {/if}
-    <span class="truncate pr-2 font-medium" class:font-semibold={isSelected}>
+    <span class="truncate pr-2 font-medium flex-grow" class:font-semibold={isSelected}>
       {node.name}
     </span>
-  </button>
-
-  <!-- Nested children -->
-  {#if hasChildren && expanded}
-    <div class="flex flex-col relative">
-      <!-- Guide Line -->
-      <div 
-        class="absolute top-0 bottom-0 border-l border-border/30" 
-        style="left: {14 + level * 12}px"
-      ></div>
-      
-      {#each Array.from(node.children.values()) as child}
-        <svelte:self
-          node={child}
-          level={level + 1}
-          bind:selectedTopic
-          {onSelect}
-        />
-      {/each}
-    </div>
-  {/if}
+  </div>
 </div>

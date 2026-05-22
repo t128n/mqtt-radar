@@ -1,5 +1,6 @@
 <!-- apps/web/src/lib/components/topic-tree.svelte -->
 <script lang="ts">
+  import VirtualList from "@sveltejs/svelte-virtual-list";
   import TopicTreeNode from "./topic-tree-node.svelte";
 
   // Props
@@ -18,6 +19,9 @@
     fullName: string;
     children: Map<string, ParsedNode>;
   }
+
+  // Keep track of collapsed nodes by fullName. By default folders are expanded.
+  let collapsedNodes = $state<Record<string, boolean>>({});
 
   // Parse list of topics to a tree structure recursively
   let rootNodes = $derived.by(() => {
@@ -71,17 +75,43 @@
 
     return sortTree(root);
   });
+
+  // Flatten the tree into an array of visible nodes for the virtual list
+  let visibleNodes = $derived.by(() => {
+    const flat: Array<{ node: ParsedNode; level: number }> = [];
+
+    const traverse = (nodes: ParsedNode[], level: number) => {
+      for (const node of nodes) {
+        flat.push({ node, level });
+        const hasChildren = node.children.size > 0;
+        if (hasChildren && !collapsedNodes[node.fullName]) {
+          traverse(Array.from(node.children.values()), level + 1);
+        }
+      }
+    };
+
+    traverse(rootNodes, 0);
+    return flat;
+  });
 </script>
 
-<div class="flex flex-col gap-0.5 max-h-full overflow-y-auto pr-1 select-none scrollbar-none">
-  {#if rootNodes.length > 0}
-    {#each rootNodes as node}
+<div class="flex-grow flex flex-col min-h-0 h-full w-full pr-1">
+  {#if visibleNodes.length > 0}
+    <VirtualList items={visibleNodes} let:item>
       <TopicTreeNode
-        {node}
-        bind:selectedTopic
-        {onSelect}
+        node={item.node}
+        level={item.level}
+        expanded={!collapsedNodes[item.node.fullName]}
+        {selectedTopic}
+        onSelect={(newTopic) => {
+          selectedTopic = newTopic;
+          if (onSelect) onSelect(newTopic);
+        }}
+        onToggle={() => {
+          collapsedNodes[item.node.fullName] = !collapsedNodes[item.node.fullName];
+        }}
       />
-    {/each}
+    </VirtualList>
   {:else}
     <div class="opacity-30 flex items-center justify-center h-full py-8 text-[11px]">
       No topics active.

@@ -35,7 +35,7 @@
   </div>
 
   <!-- Card Body -->
-  <div class={contentClass}>
+  <div class="flex flex-col flex-grow min-h-0 relative {contentClass}">
     {#if children}
       {@render children()}
     {/if}

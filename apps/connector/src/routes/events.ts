@@ -3,6 +3,12 @@ import { streamSSE } from "hono/streaming";
 import { brokerService, type MqttMessage } from "~/services/broker.js";
 import type { AppEnv } from "~/types";
 import { isAllowedOrigin } from "~/utils/cors";
+import { vValidator } from "@hono/valibot-validator";
+import * as v from "valibot";
+
+const eventsQuerySchema = v.object({
+  filter: v.optional(v.string("filter must be a string")),
+});
 
 export const eventRoutes = new Hono<AppEnv>()
   /**
@@ -19,9 +25,22 @@ export const eventRoutes = new Hono<AppEnv>()
    *   event: "message"
    *   data: { "topic": "...", "payload": "..." }
    */
-  .get("/", async (c) => {
-    const filter = c.req.query("filter") || "#";
-    const log = c.var.logger.child({ handler: "GET /api/events", filter });
+  .get(
+    "/",
+    vValidator(
+      "query",
+      eventsQuerySchema,
+      (result, c) => {
+        if (!result.success) {
+          const log = c.var.logger.child({ handler: "GET /api/events" });
+          log.warn({ issues: result.issues }, "validation failed");
+          return c.json({ error: result.issues[0].message || "Invalid query parameters" }, 400);
+        }
+      }
+    ),
+    async (c) => {
+      const { filter = "#" } = c.req.valid("query");
+      const log = c.var.logger.child({ handler: "GET /api/events", filter });
 
     log.info("SSE client connecting");
 

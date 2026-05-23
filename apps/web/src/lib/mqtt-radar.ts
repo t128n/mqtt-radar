@@ -11,7 +11,7 @@ export function createConnectorClient(origin: string) {
   return ofetch.create({
     baseURL: origin,
     retry: 0,
-    timeout: 1_000,
+    timeout: 30_000,
   });
 }
 

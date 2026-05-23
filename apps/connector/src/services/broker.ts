@@ -11,6 +11,7 @@ export type BrokerConfig = {
   cert?: string | undefined;
   key?: string | undefined;
   rejectUnauthorized?: boolean | undefined;
+  topicPrefix?: string | undefined;
 };
 
 export type MqttMessage = {
@@ -19,7 +20,10 @@ export type MqttMessage = {
 };
 
 function cleanMqttOptions(config: BrokerConfig, clientId: string) {
-  const options: Record<string, any> = { clientId };
+  const options: Record<string, any> = {
+    clientId,
+    connectTimeout: 30_000,
+  };
   if (config.username !== undefined) options.username = config.username;
   if (config.password !== undefined) options.password = config.password;
   if (config.ca !== undefined) options.ca = config.ca;
@@ -64,6 +68,28 @@ class BrokerService extends EventEmitter {
     }
   }
 
+  private getPrefilteredPatterns(filter: string): string[] {
+    const prefix = this.config?.topicPrefix;
+    if (!prefix) {
+      return filter === "#" || filter === "+/#"
+        ? [filter]
+        : [filter, `${filter}/#`];
+    }
+
+    if (filter === "#" || filter === "+/#") {
+      if (prefix.endsWith("#") || prefix.endsWith("+")) {
+        return [prefix];
+      }
+      return prefix.endsWith("/")
+        ? [`${prefix}#`]
+        : [prefix, `${prefix}/#`];
+    }
+
+    return filter.endsWith("#") || filter.endsWith("+")
+      ? [filter]
+      : [filter, `${filter}/#`];
+  }
+
   async connect(config: BrokerConfig): Promise<void> {
     if (this.discoveryClient || this.dataClient) {
       this.log.info(
@@ -102,7 +128,27 @@ class BrokerService extends EventEmitter {
         this.log.error({ err, client: "discovery" }, "MQTT client error");
       });
 
-      await this.subscribeWithFallback(this.discoveryClient, "#");
+      // Calculate discovery subscription filters
+      const discoveryFilters: string[] = [];
+      if (config.topicPrefix) {
+        const prefix = config.topicPrefix;
+        if (prefix.endsWith("#") || prefix.endsWith("+")) {
+          discoveryFilters.push(prefix);
+        } else {
+          if (prefix.endsWith("/")) {
+            discoveryFilters.push(`${prefix}#`);
+          } else {
+            discoveryFilters.push(prefix);
+            discoveryFilters.push(`${prefix}/#`);
+          }
+        }
+      } else {
+        discoveryFilters.push("#");
+      }
+
+      for (const filter of discoveryFilters) {
+        await this.subscribeWithFallback(this.discoveryClient, filter);
+      }
 
       // 2. Connect and configure the Data Client
       this.dataClient = await mqtt.connectAsync(config.url, cleanMqttOptions(config, dataClientId));
@@ -121,10 +167,7 @@ class BrokerService extends EventEmitter {
 
       // Subscribe dataClient to the default filter (or whatever was requested)
       const initialFilter = this.currentDataFilter || "#";
-      const targetPatterns =
-        initialFilter === "#" || initialFilter === "+/#"
-          ? [initialFilter]
-          : [initialFilter, `${initialFilter}/#`];
+      const targetPatterns = this.getPrefilteredPatterns(initialFilter);
 
       const activePatterns: string[] = [];
       for (const pattern of targetPatterns) {
@@ -158,10 +201,7 @@ class BrokerService extends EventEmitter {
       return;
     }
 
-    const targetPatterns =
-      targetFilter === "#" || targetFilter === "+/#"
-        ? [targetFilter]
-        : [targetFilter, `${targetFilter}/#`];
+    const targetPatterns = this.getPrefilteredPatterns(targetFilter);
 
     this.log.info(
       { oldPatterns, newFilterPatterns: targetPatterns },
@@ -190,41 +230,51 @@ class BrokerService extends EventEmitter {
   }
 
   async disconnect(): Promise<void> {
-    if (!this.discoveryClient && !this.dataClient) {
+    const hasClients = this.discoveryClient !== null || this.dataClient !== null;
+
+    if (hasClients) {
+      this.log.info({ url: this.config?.url }, "disconnecting dual MQTT clients");
+
+      const disconnects: Promise<void>[] = [];
+      if (this.discoveryClient) {
+        disconnects.push(this.discoveryClient.endAsync(true));
+        this.discoveryClient = null;
+      }
+      if (this.dataClient) {
+        disconnects.push(this.dataClient.endAsync(true));
+        this.dataClient = null;
+      }
+
+      await Promise.all(disconnects);
+    } else {
       this.log.debug("disconnect called but no active clients");
-      return;
     }
 
-    this.log.info({ url: this.config?.url }, "disconnecting dual MQTT clients");
-
-    const disconnects: Promise<void>[] = [];
-    if (this.discoveryClient) {
-      disconnects.push(this.discoveryClient.endAsync(true));
-      this.discoveryClient = null;
-    }
-    if (this.dataClient) {
-      disconnects.push(this.dataClient.endAsync(true));
-      this.dataClient = null;
-    }
-
-    await Promise.all(disconnects);
     this.config = null;
     this.activeDataFilterPatterns = [];
     this.emit("disconnect");
-    this.log.info("disconnected both MQTT clients");
+    if (hasClients) {
+      this.log.info("disconnected both MQTT clients");
+    }
   }
 
-  getStatus(): { connected: false } | { connected: true; url: string; clientId?: string } {
-    if (!this.config) return { connected: false };
+  getStatus(): { connected: false } | { connected: true; url: string; clientId?: string; topicPrefix?: string } {
+    if (!this.isConnected() || !this.config) return { connected: false };
     return {
       connected: true,
       url: this.config.url,
       ...(this.config.clientId !== undefined && { clientId: this.config.clientId }),
+      ...(this.config.topicPrefix !== undefined && { topicPrefix: this.config.topicPrefix }),
     };
   }
 
   isConnected(): boolean {
-    return this.discoveryClient !== null && this.dataClient !== null;
+    return (
+      this.discoveryClient !== null &&
+      this.discoveryClient.connected &&
+      this.dataClient !== null &&
+      this.dataClient.connected
+    );
   }
 }
 

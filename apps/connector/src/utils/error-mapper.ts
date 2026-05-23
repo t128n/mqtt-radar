@@ -24,6 +24,12 @@ export function mapBrokerError(err: any): string {
   if (code === "EHOSTUNREACH") {
     return "Host unreachable. Check your network connection or firewall rules.";
   }
+  if (code === "ECONNRESET" || message.toUpperCase().includes("ECONNRESET")) {
+    return "Connection abruptly reset by the broker (ECONNRESET). This often happens if the broker is overloaded, misconfigured, or rejects the client's network/address.";
+  }
+  if (message.toLowerCase().includes("connack timeout")) {
+    return "Connection timed out waiting for the broker's response (CONNACK timeout). Verify that the address/port is correct and that an MQTT broker is running on that port.";
+  }
 
   // 2. TLS/Certificate level errors
   if (code === "DEPTH_ZERO_SELF_SIGNED_CERT" || message.includes("self signed certificate")) {

@@ -24,6 +24,7 @@ const brokerConfigSchema = v.object({
   cert: v.optional(v.string("cert must be a string")),
   key: v.optional(v.string("key must be a string")),
   rejectUnauthorized: v.optional(v.boolean("rejectUnauthorized must be a boolean")),
+  topicPrefix: v.optional(v.string("topicPrefix must be a string")),
 });
 
 export const brokerRoutes = new Hono<AppEnv>()

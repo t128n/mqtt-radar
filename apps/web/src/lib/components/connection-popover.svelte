@@ -16,7 +16,7 @@
   } = $props();
 
   // Broker Status State
-  let brokerStatus = $state<{ connected: boolean; url?: string; clientId?: string } | null>(null);
+  let brokerStatus = $state<{ connected: boolean; url?: string; clientId?: string; topicPrefix?: string } | null>(null);
 
   // Connection display helper
   let displayStatus = $derived.by(() => {
@@ -76,6 +76,7 @@
   let brokerClientId = $state(generateRandomClientId());
   let brokerUsername = $state("");
   let brokerPassword = $state("");
+  let brokerTopicPrefix = $state("");
   let brokerConnecting = $state(false);
   let brokerError = $state<string | null>(null);
 
@@ -121,6 +122,7 @@
         ...(brokerClientId && { clientId: brokerClientId }),
         ...(brokerUsername && { username: brokerUsername }),
         ...(brokerPassword && { password: brokerPassword }),
+        ...(brokerTopicPrefix && { topicPrefix: brokerTopicPrefix }),
         ...(showTlsSettings && {
           ...(brokerCa && { ca: brokerCa }),
           ...(brokerCert && { cert: brokerCert }),
@@ -285,6 +287,12 @@
                   <span class="font-mono text-foreground select-all truncate max-w-[180px]">{brokerStatus.clientId}</span>
                 </div>
               {/if}
+              {#if brokerStatus.topicPrefix}
+                <div class="flex justify-between items-center text-[10px]">
+                  <span class="text-muted-foreground">Topic Prefix:</span>
+                  <span class="font-mono text-foreground select-all truncate max-w-[180px]">{brokerStatus.topicPrefix}</span>
+                </div>
+              {/if}
             </div>
 
             <Button
@@ -344,6 +352,18 @@
                 type="password"
                 bind:value={brokerPassword}
                 placeholder="••••••••"
+                class="h-7 text-xs border border-border bg-transparent focus:ring-1"
+              />
+            </div>
+
+            <!-- Topic Prefix (Optional) -->
+            <div class="space-y-1">
+              <Label for="broker-topic-prefix" class="text-[10px] text-muted-foreground font-medium">Topic Prefix (optional)</Label>
+              <Input
+                id="broker-topic-prefix"
+                type="text"
+                bind:value={brokerTopicPrefix}
+                placeholder="e.g. company/sensors"
                 class="h-7 text-xs border border-border bg-transparent focus:ring-1"
               />
             </div>

@@ -72,23 +72,17 @@ class BrokerService extends EventEmitter {
   private getPrefilteredPatterns(filter: string): string[] {
     const prefix = this.config?.topicPrefix;
     if (!prefix) {
-      return filter === "#" || filter === "+/#"
-        ? [filter]
-        : [filter, `${filter}/#`];
+      return filter === "#" || filter === "+/#" ? [filter] : [filter, `${filter}/#`];
     }
 
     if (filter === "#" || filter === "+/#") {
       if (prefix.endsWith("#") || prefix.endsWith("+")) {
         return [prefix];
       }
-      return prefix.endsWith("/")
-        ? [`${prefix}#`]
-        : [prefix, `${prefix}/#`];
+      return prefix.endsWith("/") ? [`${prefix}#`] : [prefix, `${prefix}/#`];
     }
 
-    return filter.endsWith("#") || filter.endsWith("+")
-      ? [filter]
-      : [filter, `${filter}/#`];
+    return filter.endsWith("#") || filter.endsWith("+") ? [filter] : [filter, `${filter}/#`];
   }
 
   async connect(config: BrokerConfig): Promise<void> {
@@ -262,7 +256,9 @@ class BrokerService extends EventEmitter {
     }
   }
 
-  getStatus(): { connected: false } | { connected: true; url: string; clientId?: string; topicPrefix?: string } {
+  getStatus():
+    | { connected: false }
+    | { connected: true; url: string; clientId?: string; topicPrefix?: string } {
     if (!this.isConnected() || !this.config) return { connected: false };
     return {
       connected: true,

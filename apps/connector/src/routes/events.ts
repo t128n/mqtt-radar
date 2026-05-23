@@ -120,6 +120,7 @@ export const eventRoutes = new Hono<AppEnv>()
 
         const disconnectHandler = () => {
           log.info("broker disconnected; closing SSE stream");
+          stream.writeSSE({ event: "disconnect", data: "{}" }).catch(() => {});
           isAborted = true;
           triggerFlush();
         };
@@ -142,6 +143,30 @@ export const eventRoutes = new Hono<AppEnv>()
           } catch (err) {
             log.error({ err }, "failed to write initial SSE ping");
             isAborted = true;
+          }
+
+          if (!brokerService.isConnected() && !isAborted) {
+            log.warn("broker is not connected; aborting SSE connection immediately");
+            try {
+              await stream.writeSSE({ event: "disconnect", data: "{}" });
+            } catch {}
+            isAborted = true;
+          }
+
+          // Send previously discovered topics immediately to populate client's topic tree
+          const retainedTopics = brokerService.getDiscoveredTopics();
+          if (retainedTopics.length > 0 && !isAborted) {
+            log.info({ count: retainedTopics.length }, "sending retained topics to new SSE client");
+            const topicEvents = retainedTopics.map((topic) => ({ type: "topic" as const, topic }));
+            try {
+              await stream.writeSSE({
+                event: "batch",
+                data: JSON.stringify(topicEvents),
+              });
+            } catch (err) {
+              log.error({ err }, "failed to write retained topics to SSE client");
+              isAborted = true;
+            }
           }
 
           let lastPingTime = Date.now();

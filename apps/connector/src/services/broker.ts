@@ -41,6 +41,7 @@ class BrokerService extends EventEmitter {
   private logger: Logger | null = null;
   private currentDataFilter: string | null = null;
   private activeDataFilterPatterns: string[] = [];
+  private discoveredTopics = new Set<string>();
 
   /** Attach the root pino logger once on startup. */
   setLogger(logger: Logger) {
@@ -91,6 +92,7 @@ class BrokerService extends EventEmitter {
   }
 
   async connect(config: BrokerConfig): Promise<void> {
+    this.discoveredTopics.clear();
     if (this.discoveryClient || this.dataClient) {
       this.log.info(
         { url: this.config?.url },
@@ -121,6 +123,7 @@ class BrokerService extends EventEmitter {
 
       this.discoveryClient.on("message", (topic) => {
         this.log.debug({ topic }, "discovery message received (extracting topic only)");
+        this.discoveredTopics.add(topic);
         this.emit("topic", topic);
       });
 
@@ -252,6 +255,7 @@ class BrokerService extends EventEmitter {
 
     this.config = null;
     this.activeDataFilterPatterns = [];
+    this.discoveredTopics.clear();
     this.emit("disconnect");
     if (hasClients) {
       this.log.info("disconnected both MQTT clients");
@@ -275,6 +279,10 @@ class BrokerService extends EventEmitter {
       this.dataClient !== null &&
       this.dataClient.connected
     );
+  }
+
+  getDiscoveredTopics(): string[] {
+    return Array.from(this.discoveredTopics);
   }
 }
 

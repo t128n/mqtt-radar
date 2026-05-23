@@ -32,6 +32,7 @@
   let cachedMessages = $state<Array<{ topic: string; payload: string; id: string; time: number }>>([]);
   let selectedTopic = $state("");
   let selectedMessage = $state<{ topic: string; payload: string; id: string; time: number } | null>(null);
+  let inspectedMessage = $derived(selectedMessage || cachedMessages[0] || null);
 
   // QoL States
   let isPaused = $state(false);
@@ -43,8 +44,8 @@
   // Derived states
   let cachedMessagesCount = $derived(cachedMessages.length);
   let formattedMessageSize = $derived.by(() => {
-    if (!selectedMessage) return "0 B";
-    const bytes = new Blob([selectedMessage.payload]).size;
+    if (!inspectedMessage) return "0 B";
+    const bytes = new Blob([inspectedMessage.payload]).size;
     if (bytes === 0) return "0 B";
     const k = 1024;
     const sizes = ["B", "KB", "MB", "GB", "TB"];
@@ -102,9 +103,9 @@
 
   // Check if inspected payload is valid JSON
   let isJson = $derived.by(() => {
-    if (!selectedMessage) return false;
+    if (!inspectedMessage) return false;
     try {
-      JSON.parse(selectedMessage.payload);
+      JSON.parse(inspectedMessage.payload);
       return true;
     } catch {
       return false;
@@ -113,12 +114,12 @@
 
   // Format inspected payload
   let formattedPayload = $derived.by(() => {
-    if (!selectedMessage) return "";
+    if (!inspectedMessage) return "";
     try {
-      const parsed = JSON.parse(selectedMessage.payload);
+      const parsed = JSON.parse(inspectedMessage.payload);
       return JSON.stringify(parsed, null, 2);
     } catch {
-      return selectedMessage.payload;
+      return inspectedMessage.payload;
     }
   });
 
@@ -126,12 +127,12 @@
   let highlightedPayload = $state("");
 
   $effect(() => {
-    if (!selectedMessage) {
+    if (!inspectedMessage) {
       highlightedPayload = "";
       return;
     }
 
-    const payload = selectedMessage.payload;
+    const payload = inspectedMessage.payload;
     let formatted = payload;
     let lang = "text";
 
@@ -164,6 +165,28 @@
       console.error("Failed to load shiki module:", err);
       highlightedPayload = "";
     });
+  });
+
+  // Message SHA-256 Hash Computation
+  let selectedMessageSha256 = $state("");
+
+  $effect(() => {
+    if (!inspectedMessage) {
+      selectedMessageSha256 = "";
+      return;
+    }
+
+    const payload = inspectedMessage.payload;
+    const msgUint8 = new TextEncoder().encode(payload);
+    crypto.subtle.digest("SHA-256", msgUint8)
+      .then((hashBuffer) => {
+        const hashArray = Array.from(new Uint8Array(hashBuffer));
+        selectedMessageSha256 = hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+      })
+      .catch((err) => {
+        console.error("Failed to compute SHA-256 hash:", err);
+        selectedMessageSha256 = "";
+      });
   });
 
   // High-performance buffering for active MQTT feeds
@@ -327,6 +350,15 @@
       } catch (err) {
         console.error("Failed to parse SSE batch event:", err);
       }
+    });
+
+    es.addEventListener("disconnect", () => {
+      console.log("Broker disconnected; clearing topics and messages");
+      topicsList = [];
+      cachedMessages = [];
+      selectedMessage = null;
+      messageBuffer = [];
+      bufferedCount = 0;
     });
 
     es.addEventListener("error", async (err) => {
@@ -678,16 +710,16 @@
       <WorkspacePane title="Inspect" icon={Braces}>
         {#snippet headerRight()}
           <div class="flex items-center gap-1.5 select-none">
-            {#if selectedMessage}
-              {@const isPinned = pinnedMessages.some(p => p.id === selectedMessage?.id)}
+            {#if inspectedMessage}
+              {@const isPinned = pinnedMessages.some(p => p.id === inspectedMessage?.id)}
               <button
                 type="button"
                 class="font-mono text-[9px] flex items-center gap-1 px-1.5 py-0.5 rounded border transition-colors cursor-pointer {isPinned ? 'bg-primary/10 border-primary/20 text-primary hover:bg-primary/20' : 'bg-muted/30 border-border hover:bg-muted/50 text-muted-foreground hover:text-foreground'}"
                 onclick={() => {
                   if (isPinned) {
-                    pinnedMessages = pinnedMessages.filter(p => p.id !== selectedMessage!.id);
+                    pinnedMessages = pinnedMessages.filter(p => p.id !== inspectedMessage!.id);
                   } else {
-                    pinnedMessages = [...pinnedMessages, selectedMessage!];
+                    pinnedMessages = [...pinnedMessages, inspectedMessage!];
                   }
                 }}
               >
@@ -696,27 +728,33 @@
               </button>
             {/if}
             <span class="font-mono text-[10px] text-muted-foreground uppercase">
-              {selectedMessage ? (isJson ? "application/json" : "text/plain") : "application/json"}
+              {inspectedMessage ? (isJson ? "application/json" : "text/plain") : "application/json"}
             </span>
           </div>
         {/snippet}
 
-        {#if selectedMessage}
+        {#if inspectedMessage}
           <div class="flex flex-col gap-3 h-full overflow-y-auto pr-1 select-text scrollbar-none animate-in fade-in duration-150">
             <!-- Metadata Details -->
             <div class="flex flex-col gap-1 pb-2 border-b border-border/40 text-[10px]">
               <div class="flex justify-between items-baseline gap-2">
                 <span class="text-muted-foreground font-semibold uppercase tracking-wider">Topic</span>
-                <span class="text-foreground font-mono font-medium select-all break-all text-right">{selectedMessage.topic}</span>
+                <span class="text-foreground font-mono font-medium select-all break-all text-right">{inspectedMessage.topic}</span>
               </div>
               <div class="flex justify-between items-baseline gap-2">
                 <span class="text-muted-foreground font-semibold uppercase tracking-wider">Timestamp</span>
-                <span class="text-foreground font-mono">{new Date(selectedMessage.time).toLocaleString()}</span>
+                <span class="text-foreground font-mono">{new Date(inspectedMessage.time).toLocaleString()}</span>
               </div>
               <div class="flex justify-between items-baseline gap-2">
                 <span class="text-muted-foreground font-semibold uppercase tracking-wider">Size</span>
                 <span class="text-foreground font-mono">{formattedMessageSize}</span>
               </div>
+              {#if selectedMessageSha256}
+                <div class="flex justify-between items-baseline gap-2">
+                  <span class="text-muted-foreground font-semibold uppercase tracking-wider">SHA-256</span>
+                  <span class="text-foreground font-mono select-all break-all text-right max-w-[280px]">{selectedMessageSha256}</span>
+                </div>
+              {/if}
             </div>
 
             <!-- Formatted Pre block with Shiki highlighting -->

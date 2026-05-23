@@ -20,6 +20,7 @@
   import Trash2 from "@lucide/svelte/icons/trash-2";
   import Pin from "@lucide/svelte/icons/pin";
   import PinOff from "@lucide/svelte/icons/pin-off";
+  import Download from "@lucide/svelte/icons/download";
 
   // Connection State
   let connection = $state<{ origin: string | null }>({
@@ -220,6 +221,31 @@
       cachedMessages = [...messageBuffer, ...cachedMessages].slice(0, 500);
       messageBuffer = [];
     }
+  }
+
+  function downloadMessageStream() {
+    if (cachedMessages.length === 0) return;
+    
+    // Convert each message object to a single-line JSON string (NDJSON)
+    const ndjson = cachedMessages
+      .map((msg) => JSON.stringify({
+        topic: msg.topic,
+        payload: msg.payload,
+        time: msg.time
+      }))
+      .join("\n");
+      
+    const blob = new Blob([ndjson], { type: "application/x-ndjson;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    
+    const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
+    link.href = url;
+    link.download = `mqtt-stream-${timestamp}.ndjson`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
   }
 
   // SSE event source connection
@@ -549,6 +575,17 @@
                   {:else}
                     <Pause size="11" />
                   {/if}
+                </button>
+
+                <!-- Download -->
+                <button
+                  type="button"
+                  disabled={cachedMessagesCount === 0}
+                  class="p-1.5 rounded border border-border/40 hover:bg-muted/40 text-muted-foreground hover:text-foreground disabled:opacity-40 disabled:hover:bg-transparent disabled:hover:text-muted-foreground/60 transition-colors cursor-pointer flex items-center justify-center h-7 w-7"
+                  title="Download Stream"
+                  onclick={downloadMessageStream}
+                >
+                  <Download size="11" />
                 </button>
 
                 <!-- Clear -->

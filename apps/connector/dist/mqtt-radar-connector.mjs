@@ -32601,7 +32601,10 @@ var import_pino = /* @__PURE__ */ __toESM(require_pino(), 1);
 var import_pino_pretty = /* @__PURE__ */ __toESM(require_pino_pretty(), 1);
 var import_build = /* @__PURE__ */ __toESM(require_build(), 1);
 function cleanMqttOptions(config, clientId) {
-	const options = { clientId };
+	const options = {
+		clientId,
+		connectTimeout: 3e4
+	};
 	if (config.username !== void 0) options.username = config.username;
 	if (config.password !== void 0) options.password = config.password;
 	if (config.ca !== void 0) options.ca = config.ca;
@@ -32617,6 +32620,7 @@ var BrokerService = class extends EventEmitter {
 	logger = null;
 	currentDataFilter = null;
 	activeDataFilterPatterns = [];
+	discoveredTopics = /* @__PURE__ */ new Set();
 	/** Attach the root pino logger once on startup. */
 	setLogger(logger) {
 		this.logger = logger.child({ service: "broker" });
@@ -32640,7 +32644,17 @@ var BrokerService = class extends EventEmitter {
 			throw err;
 		}
 	}
+	getPrefilteredPatterns(filter) {
+		const prefix = this.config?.topicPrefix;
+		if (!prefix) return filter === "#" || filter === "+/#" ? [filter] : [filter, `${filter}/#`];
+		if (filter === "#" || filter === "+/#") {
+			if (prefix.endsWith("#") || prefix.endsWith("+")) return [prefix];
+			return prefix.endsWith("/") ? [`${prefix}#`] : [prefix, `${prefix}/#`];
+		}
+		return filter.endsWith("#") || filter.endsWith("+") ? [filter] : [filter, `${filter}/#`];
+	}
 	async connect(config) {
+		this.discoveredTopics.clear();
 		if (this.discoveryClient || this.dataClient) {
 			this.log.info({ url: this.config?.url }, "existing connection found — disconnecting before reconnect");
 			await this.disconnect();
@@ -32659,6 +32673,7 @@ var BrokerService = class extends EventEmitter {
 			this.log.info({ url: config.url }, "discoveryClient connected successfully");
 			this.discoveryClient.on("message", (topic) => {
 				this.log.debug({ topic }, "discovery message received (extracting topic only)");
+				this.discoveredTopics.add(topic);
 				this.emit("topic", topic);
 			});
 			this.discoveryClient.on("error", (err) => {
@@ -32667,7 +32682,17 @@ var BrokerService = class extends EventEmitter {
 					client: "discovery"
 				}, "MQTT client error");
 			});
-			await this.subscribeWithFallback(this.discoveryClient, "#");
+			const discoveryFilters = [];
+			if (config.topicPrefix) {
+				const prefix = config.topicPrefix;
+				if (prefix.endsWith("#") || prefix.endsWith("+")) discoveryFilters.push(prefix);
+				else if (prefix.endsWith("/")) discoveryFilters.push(`${prefix}#`);
+				else {
+					discoveryFilters.push(prefix);
+					discoveryFilters.push(`${prefix}/#`);
+				}
+			} else discoveryFilters.push("#");
+			for (const filter of discoveryFilters) await this.subscribeWithFallback(this.discoveryClient, filter);
 			this.dataClient = await import_build.default.connectAsync(config.url, cleanMqttOptions(config, dataClientId));
 			this.log.info({ url: config.url }, "dataClient connected successfully");
 			this.dataClient.on("message", (topic, payload) => {
@@ -32688,7 +32713,7 @@ var BrokerService = class extends EventEmitter {
 				}, "MQTT client error");
 			});
 			const initialFilter = this.currentDataFilter || "#";
-			const targetPatterns = initialFilter === "#" || initialFilter === "+/#" ? [initialFilter] : [initialFilter, `${initialFilter}/#`];
+			const targetPatterns = this.getPrefilteredPatterns(initialFilter);
 			const activePatterns = [];
 			for (const pattern of targetPatterns) {
 				const activePattern = await this.subscribeWithFallback(this.dataClient, pattern);
@@ -32714,7 +32739,7 @@ var BrokerService = class extends EventEmitter {
 			this.log.debug({ filter: targetFilter }, "dataClient not connected yet, storing filter for later");
 			return;
 		}
-		const targetPatterns = targetFilter === "#" || targetFilter === "+/#" ? [targetFilter] : [targetFilter, `${targetFilter}/#`];
+		const targetPatterns = this.getPrefilteredPatterns(targetFilter);
 		this.log.info({
 			oldPatterns,
 			newFilterPatterns: targetPatterns
@@ -32736,36 +32761,40 @@ var BrokerService = class extends EventEmitter {
 		}
 	}
 	async disconnect() {
-		if (!this.discoveryClient && !this.dataClient) {
-			this.log.debug("disconnect called but no active clients");
-			return;
-		}
-		this.log.info({ url: this.config?.url }, "disconnecting dual MQTT clients");
-		const disconnects = [];
-		if (this.discoveryClient) {
-			disconnects.push(this.discoveryClient.endAsync(true));
-			this.discoveryClient = null;
-		}
-		if (this.dataClient) {
-			disconnects.push(this.dataClient.endAsync(true));
-			this.dataClient = null;
-		}
-		await Promise.all(disconnects);
+		const hasClients = this.discoveryClient !== null || this.dataClient !== null;
+		if (hasClients) {
+			this.log.info({ url: this.config?.url }, "disconnecting dual MQTT clients");
+			const disconnects = [];
+			if (this.discoveryClient) {
+				disconnects.push(this.discoveryClient.endAsync(true));
+				this.discoveryClient = null;
+			}
+			if (this.dataClient) {
+				disconnects.push(this.dataClient.endAsync(true));
+				this.dataClient = null;
+			}
+			await Promise.all(disconnects);
+		} else this.log.debug("disconnect called but no active clients");
 		this.config = null;
 		this.activeDataFilterPatterns = [];
+		this.discoveredTopics.clear();
 		this.emit("disconnect");
-		this.log.info("disconnected both MQTT clients");
+		if (hasClients) this.log.info("disconnected both MQTT clients");
 	}
 	getStatus() {
-		if (!this.config) return { connected: false };
+		if (!this.isConnected() || !this.config) return { connected: false };
 		return {
 			connected: true,
 			url: this.config.url,
-			...this.config.clientId !== void 0 && { clientId: this.config.clientId }
+			...this.config.clientId !== void 0 && { clientId: this.config.clientId },
+			...this.config.topicPrefix !== void 0 && { topicPrefix: this.config.topicPrefix }
 		};
 	}
 	isConnected() {
-		return this.discoveryClient !== null && this.dataClient !== null;
+		return this.discoveryClient !== null && this.discoveryClient.connected && this.dataClient !== null && this.dataClient.connected;
+	}
+	getDiscoveredTopics() {
+		return Array.from(this.discoveredTopics);
 	}
 };
 /** Singleton — dual MQTT connection shared across the entire process. */
@@ -32785,6 +32814,8 @@ function mapBrokerError(err) {
 	if (code === "ETIMEDOUT") return "Connection timed out. Check if the broker is online and verify your network and firewall settings.";
 	if (code === "EADDRNOTAVAIL") return "Address not available. Please verify the broker host and port.";
 	if (code === "EHOSTUNREACH") return "Host unreachable. Check your network connection or firewall rules.";
+	if (code === "ECONNRESET" || message.toUpperCase().includes("ECONNRESET")) return "Connection abruptly reset by the broker (ECONNRESET). This often happens if the broker is overloaded, misconfigured, or rejects the client's network/address.";
+	if (message.toLowerCase().includes("connack timeout")) return "Connection timed out waiting for the broker's response (CONNACK timeout). Verify that the address/port is correct and that an MQTT broker is running on that port.";
 	if (code === "DEPTH_ZERO_SELF_SIGNED_CERT" || message.includes("self signed certificate")) return "Self-signed certificate detected. To connect anyway, expand 'TLS Settings' and turn off 'Verify Server Certificate'.";
 	if (code === "CERT_HAS_EXPIRED" || message.includes("certificate has expired")) return "The broker's TLS certificate has expired. Please update the certificate on the broker.";
 	if (code === "CERT_NOT_YET_VALID") return "The broker's TLS certificate is not yet valid. Please check your local system clock.";
@@ -33256,7 +33287,8 @@ const brokerConfigSchema = /* @__PURE__ */ object({
 	ca: /* @__PURE__ */ optional(/* @__PURE__ */ string("ca must be a string")),
 	cert: /* @__PURE__ */ optional(/* @__PURE__ */ string("cert must be a string")),
 	key: /* @__PURE__ */ optional(/* @__PURE__ */ string("key must be a string")),
-	rejectUnauthorized: /* @__PURE__ */ optional(/* @__PURE__ */ boolean("rejectUnauthorized must be a boolean"))
+	rejectUnauthorized: /* @__PURE__ */ optional(/* @__PURE__ */ boolean("rejectUnauthorized must be a boolean")),
+	topicPrefix: /* @__PURE__ */ optional(/* @__PURE__ */ string("topicPrefix must be a string"))
 });
 const brokerRoutes = new Hono().post("/", vValidator("json", brokerConfigSchema, (result, c) => {
 	const log = c.var.logger.child({ handler: "POST /api/broker" });
@@ -33633,6 +33665,10 @@ const eventRoutes = new Hono().get("/", vValidator("query", eventsQuerySchema, (
 		};
 		const disconnectHandler = () => {
 			log.info("broker disconnected; closing SSE stream");
+			stream.writeSSE({
+				event: "disconnect",
+				data: "{}"
+			}).catch(() => {});
 			isAborted = true;
 			triggerFlush();
 		};
@@ -33654,6 +33690,33 @@ const eventRoutes = new Hono().get("/", vValidator("query", eventsQuerySchema, (
 			} catch (err) {
 				log.error({ err }, "failed to write initial SSE ping");
 				isAborted = true;
+			}
+			if (!brokerService.isConnected() && !isAborted) {
+				log.warn("broker is not connected; aborting SSE connection immediately");
+				try {
+					await stream.writeSSE({
+						event: "disconnect",
+						data: "{}"
+					});
+				} catch {}
+				isAborted = true;
+			}
+			const retainedTopics = brokerService.getDiscoveredTopics();
+			if (retainedTopics.length > 0 && !isAborted) {
+				log.info({ count: retainedTopics.length }, "sending retained topics to new SSE client");
+				const topicEvents = retainedTopics.map((topic) => ({
+					type: "topic",
+					topic
+				}));
+				try {
+					await stream.writeSSE({
+						event: "batch",
+						data: JSON.stringify(topicEvents)
+					});
+				} catch (err) {
+					log.error({ err }, "failed to write retained topics to SSE client");
+					isAborted = true;
+				}
 			}
 			let lastPingTime = Date.now();
 			while (!isAborted) {

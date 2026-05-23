@@ -5,6 +5,7 @@
   import { Label } from "~/lib/components/ui/label/index.js";
   import { createConnectorClient } from "~/lib/mqtt-radar";
   import { cn } from "~/lib/utils.js";
+  import { generateSlug } from "random-word-slugs";
 
   import Loader2 from "@lucide/svelte/icons/loader-2";
 
@@ -59,9 +60,20 @@
       : null
   );
 
+  function generateRandomClientId(): string {
+    return `mqtt-radar-${generateSlug(2, {
+      format: "kebab",
+      partsOfSpeech: ["adjective", "noun"],
+      categories: {
+        adjective: ["color"],
+        noun: ["animals", "technology", "transportation"]
+      }
+    })}`;
+  }
+
   // Broker Form State
   let brokerUrl = $state("mqtt://localhost:1883");
-  let brokerClientId = $state("mqtt-radar-client");
+  let brokerClientId = $state(generateRandomClientId());
   let brokerUsername = $state("");
   let brokerPassword = $state("");
   let brokerConnecting = $state(false);
@@ -307,7 +319,7 @@
                 id="broker-client-id"
                 type="text"
                 bind:value={brokerClientId}
-                placeholder="mqtt-radar-client"
+                placeholder="mqtt-radar-speedy-salmon"
                 class="h-7 text-xs border border-border bg-transparent focus:ring-1"
               />
             </div>

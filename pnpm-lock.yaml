@@ -71,6 +71,9 @@ importers:
       ofetch:
         specifier: ^1.5.1
         version: 1.5.1
+      random-word-slugs:
+        specifier: ^0.1.7
+        version: 0.1.7
     devDependencies:
       '@fontsource-variable/inter':
         specifier: ^5.2.8
@@ -1515,6 +1518,9 @@ packages:
 
   quick-format-unescaped@4.0.4:
     resolution: {integrity: sha512-tYC1Q1hgyRuHgloV/YXs2w15unPVh8qfu/qCTfhTYamaw7fyhumKa2yGpdSo87vY32rIclj+4fWYQXUMs9EHvg==}
+
+  random-word-slugs@0.1.7:
+    resolution: {integrity: sha512-8cyzxOIDeLFvwSPTgCItMXHGT5ZPkjhuFKUTww06Xg1dNMXuGxIKlARvS7upk6JXIm41ZKXmtlKR1iCRWklKmg==}
 
   readable-stream@3.6.2:
     resolution: {integrity: sha512-9u/sniCrY3D5WdsERHzHE4G2YCXqoG5FTHUiCC4SIbr6XcLZBY05ya9EKjYek9O5xOAwjGq+1JdGBAS7Q9ScoA==}
@@ -3006,6 +3012,8 @@ snapshots:
   quansync@1.0.0: {}
 
   quick-format-unescaped@4.0.4: {}
+
+  random-word-slugs@0.1.7: {}
 
   readable-stream@3.6.2:
     dependencies:

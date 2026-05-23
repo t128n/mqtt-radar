@@ -1,6 +1,6 @@
 <script lang="ts">
   import "./app.css";
-  import { onMount, tick } from "svelte";
+  import { onMount, tick, untrack } from "svelte";
   import * as Resizable from "~/lib/components/ui/resizable";
   import AppHeader from "~/lib/components/app-header.svelte";
   import ConnectionDialog from "~/lib/components/connection-dialog.svelte";
@@ -461,28 +461,33 @@
 
   // Synchronize SSE subscription to active pairing connection and filter path
   $effect(() => {
-    if (connection.origin) {
-      if (reconnectTimer) {
-        clearTimeout(reconnectTimer);
-        reconnectTimer = null;
+    const origin = connection.origin;
+    const topic = selectedTopic;
+
+    untrack(() => {
+      if (origin) {
+        if (reconnectTimer) {
+          clearTimeout(reconnectTimer);
+          reconnectTimer = null;
+        }
+        sseRetryCount = 0;
+        connectSSE(topic);
+      } else {
+        if (reconnectTimer) {
+          clearTimeout(reconnectTimer);
+          reconnectTimer = null;
+        }
+        if (eventSource) {
+          eventSource.close();
+          eventSource = null;
+        }
+        topicsList = [];
+        cachedMessages = [];
+        selectedMessage = null;
+        messageBuffer = [];
+        bufferedCount = 0;
       }
-      sseRetryCount = 0;
-      connectSSE(selectedTopic);
-    } else {
-      if (reconnectTimer) {
-        clearTimeout(reconnectTimer);
-        reconnectTimer = null;
-      }
-      if (eventSource) {
-        eventSource.close();
-        eventSource = null;
-      }
-      topicsList = [];
-      cachedMessages = [];
-      selectedMessage = null;
-      messageBuffer = [];
-      bufferedCount = 0;
-    }
+    });
   });
 </script>
 

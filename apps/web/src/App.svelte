@@ -42,6 +42,17 @@
 
   // Derived states
   let cachedMessagesCount = $derived(cachedMessages.length);
+  let formattedMessageSize = $derived.by(() => {
+    if (!selectedMessage) return "0 B";
+    const bytes = new Blob([selectedMessage.payload]).size;
+    if (bytes === 0) return "0 B";
+    const k = 1024;
+    const sizes = ["B", "KB", "MB", "GB", "TB"];
+    const i = Math.floor(Math.log(bytes) / Math.log(k));
+    const value = bytes / Math.pow(k, i);
+    const decimals = i === 0 ? 0 : 2;
+    return `${value.toFixed(decimals)} ${sizes[i]}`;
+  });
 
   // Filter messages by search query
   let filteredMessages = $derived.by(() => {
@@ -68,15 +79,24 @@
     }
   });
 
-  // Clear selection and cached messages if the active filter changes
+  // Filter selection and cached messages if the active filter changes
   let prevSelectedTopic = "";
   $effect(() => {
     if (selectedTopic !== prevSelectedTopic) {
       selectedMessage = null;
       prevSelectedTopic = selectedTopic;
-      cachedMessages = [];
-      messageBuffer = [];
-      bufferedCount = 0;
+      
+      if (selectedTopic) {
+        // Keep only messages matching the selected topic or its sub-topics
+        cachedMessages = cachedMessages.filter((msg) =>
+          msg.topic === selectedTopic || msg.topic.startsWith(selectedTopic + "/")
+        );
+        messageBuffer = messageBuffer.filter((msg) =>
+          msg.topic === selectedTopic || msg.topic.startsWith(selectedTopic + "/")
+        );
+      }
+      
+      bufferedCount = messageBuffer.length;
     }
   });
 
@@ -539,9 +559,14 @@
                         type="button"
                         class="w-full flex items-baseline justify-between py-1.5 pl-2 pr-8 rounded text-left font-mono text-[10.5px] transition-colors border group/btn cursor-pointer {isSelected ? 'bg-muted border-border' : 'hover:bg-muted/30 border-transparent bg-muted/5'}"
                         onclick={() => {
-                          selectedMessage = isSelected ? null : msg;
-                          if (selectedMessage && autoPauseOnSelect) {
-                            isPaused = true;
+                          if (isSelected) {
+                            selectedMessage = null;
+                            resumeStream();
+                          } else {
+                            selectedMessage = msg;
+                            if (autoPauseOnSelect) {
+                              isPaused = true;
+                            }
                           }
                         }}
                       >
@@ -586,9 +611,14 @@
                         type="button"
                         class="w-full flex items-baseline justify-between py-1.5 pl-2 pr-8 rounded text-left font-mono text-[10.5px] transition-colors border group/btn cursor-pointer {isSelected ? 'bg-muted border-border' : 'hover:bg-muted/30 border-transparent'}"
                         onclick={() => {
-                          selectedMessage = isSelected ? null : msg;
-                          if (selectedMessage && autoPauseOnSelect) {
-                            isPaused = true;
+                          if (isSelected) {
+                            selectedMessage = null;
+                            resumeStream();
+                          } else {
+                            selectedMessage = msg;
+                            if (autoPauseOnSelect) {
+                              isPaused = true;
+                            }
                           }
                         }}
                       >
@@ -682,6 +712,10 @@
               <div class="flex justify-between items-baseline gap-2">
                 <span class="text-muted-foreground font-semibold uppercase tracking-wider">Timestamp</span>
                 <span class="text-foreground font-mono">{new Date(selectedMessage.time).toLocaleString()}</span>
+              </div>
+              <div class="flex justify-between items-baseline gap-2">
+                <span class="text-muted-foreground font-semibold uppercase tracking-wider">Size</span>
+                <span class="text-foreground font-mono">{formattedMessageSize}</span>
               </div>
             </div>
 
